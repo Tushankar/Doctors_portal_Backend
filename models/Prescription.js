@@ -123,6 +123,7 @@ const PrescriptionSchema = new Schema(
       enum: [
         "uploaded",
         "processing",
+        "pending_approval",
         "processed",
         "accepted",
         "preparing",

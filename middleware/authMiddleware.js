@@ -59,10 +59,9 @@ export const protect = async (req, res, next) => {
         const pharmacy = await Pharmacy.findById(req.user._id);
         if (pharmacy) {
           req.user.isVerified = pharmacy.isVerified;
-          // // console.log(
-          //   // "[AUTH] Pharmacy verification status:",
-          //   pharmacy.isVerified
-          // );
+          console.log("[AUTH] Pharmacy verification status:", {
+            isVerified: pharmacy.isVerified,
+          });
         }
         break;
       default:

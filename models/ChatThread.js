@@ -13,6 +13,12 @@ const ChatThreadSchema = new Schema(
       { type: Schema.Types.ObjectId, ref: "User", required: true },
     ],
     messages: [MessageSchema],
+    prescriptionId: {
+      type: Schema.Types.ObjectId,
+      ref: "Prescription",
+      index: true,
+    },
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

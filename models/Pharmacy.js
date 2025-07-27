@@ -11,6 +11,11 @@ const PharmacySchema = new Schema(
       unique: true,
     },
 
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+
     pharmacyName: {
       type: String,
       required: [true, "Pharmacy name is required"],

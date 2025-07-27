@@ -160,7 +160,8 @@ export const getPrescriptionHistory = async (req, res) => {
   const patient = await Patient.findById(req.user.id)
     .populate({
       path: "prescriptionHistory.prescriptionId",
-      select: "uploadedAt status ocrData validationResults",
+      select:
+        "uploadedAt status ocrData validationResults createdAt description",
     })
     .populate({
       path: "prescriptionHistory.fulfilledBy",
@@ -171,9 +172,18 @@ export const getPrescriptionHistory = async (req, res) => {
     throw new ApiError("Patient not found", 404);
   }
 
+  // Map the data to use the actual prescription status instead of patient history status
+  const prescriptionData = patient.prescriptionHistory.map((historyItem) => {
+    return {
+      ...historyItem.toObject(),
+      // Override status with actual prescription status
+      status: historyItem.prescriptionId?.status || historyItem.status,
+    };
+  });
+
   res.status(200).json({
     success: true,
-    data: patient.prescriptionHistory,
+    data: prescriptionData,
   });
 };
 
@@ -353,7 +363,7 @@ export const uploadPrescription = async (req, res, next) => {
     patient.prescriptionHistory.push({
       prescriptionId: result.data._id,
       uploadedAt: new Date(),
-      status: "pending",
+      status: "uploaded", // Use valid status from updated enum
     });
     await patient.save();
     res.status(201).json(result);

@@ -5,6 +5,7 @@ import { matchDrugs } from "../utils/mlMatcher.js";
 import { fileUploadService } from "./fileUploadController.js";
 import Pharmacy from "../models/Pharmacy.js";
 import Patient from "../models/Patient.js";
+import { orderController } from "./orderController.js";
 
 class PrescriptionController {
   constructor() {
@@ -19,8 +20,8 @@ class PrescriptionController {
     this.getApprovalRequests = this.getApprovalRequests.bind(this);
     this.respondApproval = this.respondApproval.bind(this);
     this.selectPharmacy = this.selectPharmacy.bind(this);
-    this.createApprovalRequests = this.createApprovalRequests.bind(this);
     this.getIncomingRequests = this.getIncomingRequests.bind(this);
+    this.getPrescriptionWithOrder = this.getPrescriptionWithOrder.bind(this);
   }
 
   /**
@@ -31,12 +32,19 @@ class PrescriptionController {
     session.startTransaction();
 
     try {
+      console.log("[CREATE_PRESCRIPTION] Transaction started");
+
       // Validate file data
       if (!data.originalFile || !data.originalFile.secureUrl) {
+        console.error(
+          "[CREATE_PRESCRIPTION] Missing or invalid prescription file"
+        );
         const error = new Error("Invalid prescription file data");
         error.statusCode = 400;
         throw error;
       }
+
+      console.log("[CREATE_PRESCRIPTION] File data validated");
 
       // Create prescription with initial state
       const prescription = new Prescription({
@@ -46,57 +54,125 @@ class PrescriptionController {
         patientNotes: data.patientNotes || "",
         status: "uploaded",
         ocrData: {
-          // initialize with minimal required fields; defaults in schema may not apply during transactions
           extractedText: data.initialText || "",
           processingStatus: "pending",
           medications: [],
           confidence: 0,
         },
       });
-      // Explicitly ensure extractedText is present
+
       if (!prescription.ocrData.extractedText) {
+        console.warn(
+          "[CREATE_PRESCRIPTION] No extractedText, setting to empty string"
+        );
         prescription.ocrData.extractedText = "";
       }
 
-      // Attempt to save, retry if extractedText validation fails
+      console.log(
+        "[CREATE_PRESCRIPTION] Attempting to save prescription:",
+        prescription
+      );
+
       try {
         await prescription.save({ session });
+        console.log(
+          "[CREATE_PRESCRIPTION] Prescription saved successfully in DB (within transaction)"
+        );
       } catch (e) {
+        console.warn(
+          "[CREATE_PRESCRIPTION] Save error, checking extractedText issue:",
+          e.message
+        );
         if (e.message.includes("ocrData.extractedText")) {
           prescription.ocrData.extractedText = "";
           await prescription.save({ session });
+          console.log(
+            "[CREATE_PRESCRIPTION] Retried save after setting extractedText"
+          );
         } else {
           throw e;
         }
       }
+
       await session.commitTransaction();
+      console.log("[CREATE_PRESCRIPTION] Transaction committed");
 
       // Process prescription immediately
-      this.processPrescription(prescription._id).catch(console.error);
+      this.processPrescription(prescription._id)
+        .then(() =>
+          console.log("[CREATE_PRESCRIPTION] Prescription processing started")
+        )
+        .catch((err) =>
+          console.error("[CREATE_PRESCRIPTION] Error in processing:", err)
+        );
 
-      // Initialize empty approvalRequests array
-      // find patient location for geospatial query
+      // Find patient location for geospatial query
       const patient = await Patient.findById(data.patientId).lean();
-      const coords = patient.address.location.coordinates; // [lng, lat]
-      // find pharmacies within 50km (50000 meters)
+      console.log(
+        "[CREATE_PRESCRIPTION] Fetched patient location:",
+        patient?.address?.location
+      );
+
+      const coords = patient?.address?.location?.coordinates;
+
+      // Find pharmacies within 50km (50,000 meters)
       let nearby = [];
-      if (coords && coords.length === 2) {
+      if (coords && coords.length === 2 && coords[0] !== 0 && coords[1] !== 0) {
+        // Valid coordinates (not default [0,0])
         nearby = await Pharmacy.find(
           {
             location: {
               $near: {
                 $geometry: { type: "Point", coordinates: coords },
-                $maxDistance: 50000,
+                $maxDistance: 50000, // 50km
               },
             },
           },
-          "_id"
+          "_id pharmacyName"
         );
+        console.log(
+          `[CREATE_PRESCRIPTION] Found ${nearby.length} nearby pharmacies using geolocation`
+        );
+      } else {
+        console.warn(
+          "[CREATE_PRESCRIPTION] No valid coordinates for patient, falling back to city/state search"
+        );
+
+        // Fallback: search by city/state if coordinates are invalid
+        const patientCity = patient?.address?.city;
+        const patientState = patient?.address?.state;
+
+        if (patientCity || patientState) {
+          const cityStateQuery = {};
+          if (patientCity)
+            cityStateQuery["address.city"] = new RegExp(patientCity, "i");
+          if (patientState)
+            cityStateQuery["address.state"] = new RegExp(patientState, "i");
+
+          nearby = await Pharmacy.find(
+            cityStateQuery,
+            "_id pharmacyName"
+          ).limit(10);
+          console.log(
+            `[CREATE_PRESCRIPTION] Found ${nearby.length} pharmacies in city/state: ${patientCity}, ${patientState}`
+          );
+        } else {
+          // Last resort: get any approved pharmacies (limit to prevent overwhelming)
+          nearby = await Pharmacy.find({}, "_id pharmacyName").limit(5);
+          console.log(
+            `[CREATE_PRESCRIPTION] No location data, using ${nearby.length} random pharmacies`
+          );
+        }
       }
+
       prescription.approvalRequests = nearby.map((ph) => ({
         pharmacyId: ph._id,
+        status: "pending", // Explicitly set status for approval requests
       }));
       await prescription.save();
+      console.log(
+        "[CREATE_PRESCRIPTION] Updated prescription with approvalRequests"
+      );
 
       return {
         success: true,
@@ -105,11 +181,16 @@ class PrescriptionController {
       };
     } catch (error) {
       await session.abortTransaction();
+      console.error(
+        "[CREATE_PRESCRIPTION] Transaction aborted due to error:",
+        error.message
+      );
       const err = new Error(error.message || "Failed to create prescription");
       err.statusCode = error.statusCode || 500;
       throw err;
     } finally {
       session.endSession();
+      console.log("[CREATE_PRESCRIPTION] Session ended");
     }
   }
 
@@ -119,7 +200,10 @@ class PrescriptionController {
       _id: prescriptionId,
       patientId,
     })
-      .populate("approvalRequests.pharmacyId", "pharmacyName contactInfo")
+      .populate(
+        "approvalRequests.pharmacyId",
+        "pharmacyName contactInfo address.city address.state"
+      )
       .lean();
     if (!prescription)
       throw new Error("Prescription not found or unauthorized");
@@ -130,39 +214,102 @@ class PrescriptionController {
   }
 
   // Pharmacy respond to approval request
-  async respondApproval(prescriptionId, pharmacyId, status) {
+  async respondApproval(prescriptionId, userId, status) {
+    // Resolve pharmacy document from user
+    const pharmacy = await Pharmacy.findOne({ userId });
+    if (!pharmacy) throw new Error("Pharmacy not found for user");
+    const pharmacyId = pharmacy._id;
     const prescription = await Prescription.findById(prescriptionId);
     if (!prescription) throw new Error("Prescription not found");
     const req = prescription.approvalRequests.find(
       (a) => a.pharmacyId.toString() === pharmacyId.toString()
     );
     if (!req) throw new Error("Approval request not found");
+
+    console.log(
+      `[RESPOND_APPROVAL] Processing approval for prescription ${prescriptionId}:`
+    );
+    console.log(`  Current status: ${prescription.status}`);
+    console.log(`  Pharmacy response: ${status}`);
+    console.log(`  OCR status: ${prescription.ocrData?.processingStatus}`);
+
+    // Update the approval request
     req.status = status;
     req.respondedAt = new Date();
+
+    // Update prescription status logic
+    if (status === "approved") {
+      // Check if OCR processing is complete and at least one pharmacy approved
+      const hasApprovedPharmacy = prescription.approvalRequests.some(
+        (approval) => approval.status === "approved"
+      );
+
+      const isOcrComplete =
+        prescription.ocrData?.processingStatus === "completed";
+
+      console.log(`  Has approved pharmacy: ${hasApprovedPharmacy}`);
+      console.log(`  Is OCR complete: ${isOcrComplete}`);
+
+      // Handle legacy "pending" status by updating to correct status first
+      if (prescription.status === "pending") {
+        prescription.status = "pending_approval";
+        console.log(
+          `[RESPOND_APPROVAL] Updated legacy status from "pending" to "pending_approval"`
+        );
+      }
+
+      // Mark as "processed" if EITHER OCR is complete OR we have pharmacy approvals
+      if (
+        (hasApprovedPharmacy || isOcrComplete) &&
+        prescription.status !== "processed"
+      ) {
+        prescription.status = "processed";
+        console.log(
+          `[RESPOND_APPROVAL] Prescription ${prescriptionId} status updated to "processed" - ${
+            hasApprovedPharmacy && isOcrComplete
+              ? "Both OCR complete and pharmacy approved"
+              : hasApprovedPharmacy
+              ? "Pharmacy approved (OCR pending)"
+              : "OCR complete (pharmacy approval pending)"
+          }`
+        );
+
+        // Sync patient history status
+        await this.syncPatientHistoryStatus(prescriptionId, "processed");
+      }
+    }
+
     await prescription.save();
+    console.log(`[RESPOND_APPROVAL] Final status: ${prescription.status}`);
     return { success: true, message: `Request ${status}` };
   }
 
   // Pharmacy fetch incoming prescription requests pending their approval
-  async getIncomingRequests(pharmacyId) {
+  async getIncomingRequests(userId) {
+    // Resolve pharmacy document from user
+    const pharmacy = await Pharmacy.findOne({ userId });
+    if (!pharmacy) throw new Error("Pharmacy not found for user");
+    const pharmacyId = pharmacy._id;
     // Find prescriptions where this pharmacy has a pending approval request
     const prescriptions = await Prescription.find({
       "approvalRequests.pharmacyId": pharmacyId,
       "approvalRequests.status": "pending",
     })
-      .populate("patientId", "profile.name")
+      .populate("patientId", "firstName lastName")
       .lean();
     // Map to request info
     const requests = prescriptions.map((p) => {
-      const req = p.approvalRequests.find(
+      const item = p.approvalRequests.find(
         (a) =>
           a.pharmacyId.toString() === pharmacyId.toString() &&
           a.status === "pending"
       );
+      const first = p.patientId?.firstName || "";
+      const last = p.patientId?.lastName || "";
       return {
         prescriptionId: p._id,
-        patient: { profile: { name: p.patientId.profile.name } },
-        requestedAt: req.requestedAt,
+        patientName: `${first} ${last}`.trim(),
+        requestedAt: item?.requestedAt,
       };
     });
     return { success: true, data: { requests } };
@@ -183,10 +330,92 @@ class PrescriptionController {
         a.status === "approved"
     );
     if (!approved) throw new Error("Pharmacy not approved");
+
+    // Update prescription with selected pharmacy
     prescription.pharmacyId = pharmacyId;
     prescription.status = "accepted";
     await prescription.save();
-    return { success: true, message: "Pharmacy selected" };
+
+    // Sync patient history status
+    await this.syncPatientHistoryStatus(prescriptionId, "accepted");
+
+    // Create an order for this prescription
+    try {
+      const orderResult = await orderController.createOrder(
+        prescriptionId,
+        patientId,
+        pharmacyId,
+        {
+          orderType: "pickup", // Default to pickup, can be changed later
+          paymentMethod: "cash", // Default payment method
+          isUrgent: false,
+        }
+      );
+      console.log(
+        `[SELECT_PHARMACY] Order created successfully: ${orderResult.data.orderNumber}`
+      );
+    } catch (orderError) {
+      console.error(
+        `[SELECT_PHARMACY] Failed to create order: ${orderError.message}`
+      );
+      // Don't fail the pharmacy selection if order creation fails
+    }
+
+    // Populate pharmacy details for response
+    await prescription.populate(
+      "pharmacyId",
+      "pharmacyName contactInfo address"
+    );
+
+    return {
+      success: true,
+      message: "Pharmacy selected successfully",
+      data: {
+        prescriptionId: prescription._id,
+        selectedPharmacy: prescription.pharmacyId,
+        status: prescription.status,
+      },
+    };
+  }
+
+  // Get prescription with order/fulfillment details for patient
+  async getPrescriptionWithOrder(prescriptionId, patientId) {
+    const prescription = await Prescription.findOne({
+      _id: prescriptionId,
+      patientId,
+    })
+      .populate(
+        "pharmacyId",
+        "pharmacyName contactInfo address.city address.state"
+      )
+      .populate(
+        "approvalRequests.pharmacyId",
+        "pharmacyName contactInfo address.city address.state"
+      )
+      .lean();
+
+    if (!prescription)
+      throw new Error("Prescription not found or unauthorized");
+
+    // Get approved pharmacies
+    const approvedPharmacies = prescription.approvalRequests.filter(
+      (approval) => approval.status === "approved"
+    );
+
+    return {
+      success: true,
+      data: {
+        prescription,
+        selectedPharmacy: prescription.pharmacyId,
+        approvedPharmacies,
+        orderStatus: prescription.status,
+        canPlaceOrder:
+          approvedPharmacies.length > 0 && !prescription.pharmacyId,
+        canChat:
+          !!prescription.pharmacyId &&
+          ["accepted", "preparing", "ready"].includes(prescription.status),
+      },
+    };
   }
 
   /**
@@ -236,7 +465,22 @@ class PrescriptionController {
           reviewRequired: false,
           validatedAt: new Date(),
         };
+
+        // Check if any pharmacy has already approved this prescription
+        const hasApprovedPharmacy = prescription.approvalRequests.some(
+          (approval) => approval.status === "approved"
+        );
+
+        // Set status to "processed" since OCR is complete (regardless of pharmacy approvals)
+        // OR if we have pharmacy approvals (even if OCR wasn't needed)
         prescription.status = "processed";
+
+        // Sync patient history status
+        await this.syncPatientHistoryStatus(prescriptionId, "processed");
+
+        console.log(
+          `[PROCESS_PRESCRIPTION] OCR completed for ${prescriptionId}. Status: ${prescription.status} (Has approvals: ${hasApprovedPharmacy})`
+        );
       } else {
         prescription.status = "processing_failed";
         prescription.validationResults = {
@@ -550,6 +794,24 @@ class PrescriptionController {
     }
   }
 
+  // Helper method to sync patient prescription history status
+  async syncPatientHistoryStatus(prescriptionId, newStatus) {
+    try {
+      await Patient.updateMany(
+        { "prescriptionHistory.prescriptionId": prescriptionId },
+        { $set: { "prescriptionHistory.$.status": newStatus } }
+      );
+      console.log(
+        `[SYNC_PATIENT_HISTORY] Updated patient history status to ${newStatus} for prescription ${prescriptionId}`
+      );
+    } catch (error) {
+      console.error(
+        `[SYNC_PATIENT_HISTORY] Error updating patient history status:`,
+        error
+      );
+    }
+  }
+
   // Helper methods
   determineValidity(medicationValidations, drugInteractions) {
     const hasHighSeverityFlags = medicationValidations.some((validation) =>
@@ -598,7 +860,8 @@ class PrescriptionController {
   validateStatusTransition(currentStatus, newStatus) {
     const validTransitions = {
       uploaded: ["processing", "cancelled"],
-      processing: ["processed", "processing_failed"],
+      processing: ["pending_approval", "processing_failed"],
+      pending_approval: ["processed", "cancelled"],
       processed: ["accepted", "cancelled"],
       accepted: ["preparing", "cancelled"],
       preparing: ["ready", "cancelled"],

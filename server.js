@@ -18,6 +18,7 @@ dotenv.config();
 import pharmacyRoutes from "./routes/pharmacyRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
+import orderRoutes from "./routes/orderRoutes.js";
 // Connect to database
 connectDB();
 
@@ -52,6 +53,8 @@ app.use("/api/v1/pharmacies", pharmacyRoutes);
 app.use("/api/v1/pharmacies", inventoryRoutes);
 // Chat routes for patient-pharmacy messaging
 app.use("/api/v1/chat", chatRoutes);
+// Order routes for order management
+app.use("/api/v1/orders", orderRoutes);
 // Patient routes
 app.use("/api/v1/patients", patientRoutes);
 

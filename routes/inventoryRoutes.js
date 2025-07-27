@@ -31,7 +31,7 @@ router.use(protect);
 // Route for uploading CSV inventory file
 router.post(
   "/:pharmacyId/inventory/upload-csv",
-  checkRole("pharmacy"),
+  checkRole(["pharmacy"]),
   upload.single("csvFile"),
   async (req, res, next) => {
     try {
@@ -56,7 +56,7 @@ router.post(
 // Route to get all inventory items
 router.get(
   "/:pharmacyId/inventory",
-  checkRole("pharmacy"),
+  checkRole(["pharmacy"]),
   async (req, res, next) => {
     try {
       const { pharmacyId } = req.params;
@@ -75,7 +75,7 @@ router.get(
 // Route to add a single inventory item
 router.post(
   "/:pharmacyId/inventory",
-  checkRole("pharmacy"),
+  checkRole(["pharmacy"]),
   async (req, res, next) => {
     try {
       const { pharmacyId } = req.params;

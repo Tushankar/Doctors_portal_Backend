@@ -87,14 +87,17 @@ const patientSchema = new mongoose.Schema({
       status: {
         type: String,
         enum: [
-          "pending",
+          "uploaded",
+          "processing",
+          "pending_approval",
+          "processed",
           "accepted",
           "preparing",
-          "dispatched",
+          "ready",
           "delivered",
           "cancelled",
         ],
-        default: "pending",
+        default: "uploaded",
       },
       fulfilledBy: {
         type: mongoose.Schema.Types.ObjectId,

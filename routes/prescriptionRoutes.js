@@ -52,24 +52,6 @@ router.post(
   fileUploadService.getUploadMiddleware("PRESCRIPTION").single("file"),
   async (req, res, next) => {
     try {
-      // Patient select a pharmacy for fulfillment
-      router.patch(
-        "/:id/select",
-        checkRole(["patient"]),
-        async (req, res, next) => {
-          try {
-            const { pharmacyId } = req.body;
-            const result = await prescriptionController.selectPharmacy(
-              req.params.id,
-              req.user.id,
-              pharmacyId
-            );
-            res.json(result);
-          } catch (err) {
-            next(err);
-          }
-        }
-      );
       // Process uploaded file using FileUploadService
       const processedFile = fileUploadService.processUploadedFile(req.file);
 
@@ -113,6 +95,22 @@ router.get("/", async (req, res, next) => {
     res.json(result);
   } catch (error) {
     next(error);
+  }
+});
+
+// Pharmacy fetch incoming prescription requests
+import { checkPharmacyVerification } from "../middleware/roleMiddleware.js";
+
+router.get("/requests", checkRole(["pharmacy"]), async (req, res, next) => {
+  try {
+    console.log("[DEBUG] /requests route hit");
+    console.log("[DEBUG] req.user:", req.user);
+    const result = await prescriptionController.getIncomingRequests(
+      req.user.id
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -175,12 +173,13 @@ router.patch(
 router.patch(
   "/:id/approval",
   checkRole(["pharmacy"]),
+  checkPharmacyVerification,
   async (req, res, next) => {
     try {
       const { status } = req.body;
       const result = await prescriptionController.respondApproval(
         req.params.id,
-        req.user.pharmacyId,
+        req.user.id,
         status
       );
       res.json(result);
@@ -189,17 +188,55 @@ router.patch(
     }
   }
 );
-// Pharmacy fetch incoming prescription requests
-router.get("/requests", checkRole(["pharmacy"]), async (req, res, next) => {
+
+// Patient get approval requests for their prescription
+router.get("/:id/approvals", checkRole(["patient"]), async (req, res, next) => {
   try {
-    const result = await prescriptionController.getIncomingRequests(
-      req.user.pharmacyId
+    const result = await prescriptionController.getApprovalRequests(
+      req.params.id,
+      req.user.id
     );
     res.json(result);
   } catch (err) {
     next(err);
   }
 });
+
+// Patient get prescription with order status and pharmacy details
+router.get(
+  "/:id/order-status",
+  checkRole(["patient"]),
+  async (req, res, next) => {
+    try {
+      const result = await prescriptionController.getPrescriptionWithOrder(
+        req.params.id,
+        req.user.id
+      );
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// Patient select pharmacy for fulfillment
+router.patch(
+  "/:id/select-pharmacy",
+  checkRole(["patient"]),
+  async (req, res, next) => {
+    try {
+      const { pharmacyId } = req.body;
+      const result = await prescriptionController.selectPharmacy(
+        req.params.id,
+        req.user.id,
+        pharmacyId
+      );
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * @route   GET /api/v1/prescriptions/:id/processing-status

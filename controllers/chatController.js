@@ -1,15 +1,29 @@
 import ChatThread from "../models/ChatThread.js";
 import ApiError from "../utils/ApiError.js";
 
-// Initialize or fetch thread for patient-pharmacy pair
-export const initChat = async (patientId, pharmacyId) => {
-  let thread = await ChatThread.findOne({
+// Initialize or fetch thread for patient-pharmacy pair (with optional prescription)
+export const initChat = async (
+  patientId,
+  pharmacyId,
+  prescriptionId = null
+) => {
+  let query = {
     participants: { $all: [patientId, pharmacyId] },
-  });
+  };
+
+  if (prescriptionId) {
+    query.prescriptionId = prescriptionId;
+  } else {
+    query.prescriptionId = { $exists: false };
+  }
+
+  let thread = await ChatThread.findOne(query);
+
   if (!thread) {
     thread = new ChatThread({
       participants: [patientId, pharmacyId],
       messages: [],
+      prescriptionId: prescriptionId || undefined,
     });
     await thread.save();
   }
@@ -37,6 +51,7 @@ export const getChatThreads = async (userId) => {
   // find threads involving the user
   const threads = await ChatThread.find({ participants: userId })
     .populate("participants", "profile.name role")
+    .populate("prescriptionId", "status description createdAt")
     .lean();
   return { success: true, data: threads };
 };
