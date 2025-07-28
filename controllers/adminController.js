@@ -131,6 +131,10 @@ export const approvePharmacy = async (req, res, next) => {
       ),
       deliveryAvailable: approval.pharmacyData.deliveryAvailable || false,
       deliveryRadius: approval.pharmacyData.deliveryRadius || 0,
+      // Set approval status to approved and related fields
+      approvalStatus: "approved",
+      approvedBy: req.user.id,
+      approvedAt: new Date(),
     });
     // Update approval status
     approval.status = "approved";
@@ -449,6 +453,43 @@ export const updateAdminPermissions = async (req, res, next) => {
       },
     });
   } catch (error) {
+    next(error);
+  }
+};
+
+// Fix existing pharmacies that were approved but have pending status
+export const fixPharmacyApprovalStatus = async (req, res, next) => {
+  try {
+    // Find all pharmacies that are active (meaning they were approved) but have pending status
+    const pharmaciesToFix = await Pharmacy.find({
+      approvalStatus: "pending",
+      isActive: true,
+      // Additional check: if they have a user account and it's active, they were approved
+      userId: { $exists: true },
+    }).populate("userId", "isActive");
+
+    let fixedCount = 0;
+    for (const pharmacy of pharmaciesToFix) {
+      // If the user account is active, this pharmacy was approved
+      if (pharmacy.userId && pharmacy.userId.isActive) {
+        await Pharmacy.findByIdAndUpdate(pharmacy._id, {
+          approvalStatus: "approved",
+          approvedAt: pharmacy.createdAt, // Use creation date as approved date if not set
+        });
+        fixedCount++;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Fixed approval status for ${fixedCount} pharmacies`,
+      data: {
+        totalChecked: pharmaciesToFix.length,
+        fixed: fixedCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error fixing pharmacy approval status:", error);
     next(error);
   }
 };

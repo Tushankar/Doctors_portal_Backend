@@ -1,6 +1,7 @@
 import express from "express";
 import { orderController } from "../controllers/orderController.js";
 import { authorize as checkRole } from "../middleware/roleMiddleware.js";
+import { protect } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -9,7 +10,7 @@ const router = express.Router();
  * @desc    Create a new order (when patient selects pharmacy)
  * @access  Private (Patient only)
  */
-router.post("/", checkRole(["patient"]), async (req, res, next) => {
+router.post("/", protect, checkRole(["patient"]), async (req, res, next) => {
   try {
     const { prescriptionId, pharmacyId, ...orderData } = req.body;
     const result = await orderController.createOrder(
@@ -29,7 +30,7 @@ router.post("/", checkRole(["patient"]), async (req, res, next) => {
  * @desc    Get order by ID
  * @access  Private (Patient or Pharmacy)
  */
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", protect, async (req, res, next) => {
   try {
     const result = await orderController.getOrderById(
       req.params.id,
@@ -47,7 +48,7 @@ router.get("/:id", async (req, res, next) => {
  * @desc    Get orders (filtered by user role)
  * @access  Private
  */
-router.get("/", async (req, res, next) => {
+router.get("/", protect, async (req, res, next) => {
   try {
     const { status, page = 1, limit = 10 } = req.query;
 
@@ -81,46 +82,56 @@ router.get("/", async (req, res, next) => {
  * @desc    Update order status
  * @access  Private (Pharmacy only)
  */
-router.patch("/:id/status", checkRole(["pharmacy"]), async (req, res, next) => {
-  try {
-    const { status, notes } = req.body;
-    const result = await orderController.updateOrderStatus(
-      req.params.id,
-      status,
-      req.user.id,
-      notes
-    );
-    res.json(result);
-  } catch (error) {
-    next(error);
+router.patch(
+  "/:id/status",
+  protect,
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      const { status, notes } = req.body;
+      const result = await orderController.updateOrderStatus(
+        req.params.id,
+        status,
+        req.user.id,
+        notes
+      );
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 /**
  * @route   PATCH /api/v1/orders/:id/items
  * @desc    Update order items and pricing
  * @access  Private (Pharmacy only)
  */
-router.patch("/:id/items", checkRole(["pharmacy"]), async (req, res, next) => {
-  try {
-    const { items } = req.body;
-    const result = await orderController.updateOrderItems(
-      req.params.id,
-      items,
-      req.user.id
-    );
-    res.json(result);
-  } catch (error) {
-    next(error);
+router.patch(
+  "/:id/items",
+  protect,
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      const { items } = req.body;
+      const result = await orderController.updateOrderItems(
+        req.params.id,
+        items,
+        req.user.id
+      );
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 /**
  * @route   PATCH /api/v1/orders/:id/cancel
  * @desc    Cancel order
  * @access  Private (Patient or Pharmacy)
  */
-router.patch("/:id/cancel", async (req, res, next) => {
+router.patch("/:id/cancel", protect, async (req, res, next) => {
   try {
     const { reason } = req.body;
     const result = await orderController.cancelOrder(
@@ -140,7 +151,7 @@ router.patch("/:id/cancel", async (req, res, next) => {
  * @desc    Get order history/timeline
  * @access  Private (Patient or Pharmacy)
  */
-router.get("/:id/history", async (req, res, next) => {
+router.get("/:id/history", protect, async (req, res, next) => {
   try {
     const result = await orderController.getOrderHistory(
       req.params.id,
@@ -160,6 +171,7 @@ router.get("/:id/history", async (req, res, next) => {
  */
 router.get(
   "/pharmacy/dashboard",
+  protect,
   checkRole(["pharmacy"]),
   async (req, res, next) => {
     try {

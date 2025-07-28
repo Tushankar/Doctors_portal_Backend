@@ -311,6 +311,12 @@ export const getPharmacyDetails = async (pharmacyId) => {
       .populate("userId", "email")
       .lean();
     console.log("getPharmacyDetails - fetched pharmacy:", pharmacy);
+    console.log(
+      "getPharmacyDetails - approval status:",
+      pharmacy?.approvalStatus
+    );
+    console.log("getPharmacyDetails - approved at:", pharmacy?.approvedAt);
+    console.log("getPharmacyDetails - is active:", pharmacy?.isActive);
     if (!pharmacy) {
       const error = new Error("Pharmacy not found");
       error.statusCode = 404;
@@ -621,4 +627,298 @@ const getNextOpeningTime = (pharmacy) => {
   }
 
   return null;
+};
+
+// Health Records Management for Pharmacies
+
+export const getPatientHealthRecords = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+    const pharmacyId = req.user.pharmacyId;
+
+    // Import Patient model here to avoid circular dependency
+    const Patient = (await import("../models/Patient.js")).default;
+
+    const patient = await Patient.findById(patientId).select(
+      "medicalHistory allergies currentMedications vitalSigns emergencyContact firstName lastName phone dateOfBirth"
+    );
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    // Filter medical history to only show records shared with this pharmacy
+    const sharedMedicalHistory = patient.medicalHistory.filter((record) =>
+      record.sharedWithPharmacies.some(
+        (share) =>
+          share.pharmacyId.toString() === pharmacyId &&
+          share.approvalStatus === "approved"
+      )
+    );
+
+    // Allergies and current medications are always accessible for safety
+    const healthRecords = {
+      patientInfo: {
+        name: `${patient.firstName} ${patient.lastName}`,
+        phone: patient.phone,
+        dateOfBirth: patient.dateOfBirth,
+        emergencyContact: patient.emergencyContact,
+      },
+      medicalHistory: sharedMedicalHistory,
+      allergies: patient.allergies || [],
+      currentMedications: patient.currentMedications || [],
+      vitalSigns: patient.vitalSigns?.slice(-3) || [], // Last 3 vital sign records
+    };
+
+    res.status(200).json({
+      success: true,
+      data: healthRecords,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const approveHealthRecordAccess = async (req, res, next) => {
+  try {
+    const { patientId, recordId } = req.params;
+    const { approvalStatus } = req.body; // 'approved' or 'rejected'
+    const pharmacyId = req.user.pharmacyId;
+
+    // Import Patient model here to avoid circular dependency
+    const Patient = (await import("../models/Patient.js")).default;
+
+    const patient = await Patient.findById(patientId);
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    // Find the medical history record and update approval status
+    const record = patient.medicalHistory.id(recordId);
+    if (!record) {
+      throw new ApiError("Medical history record not found", 404);
+    }
+
+    const shareRecord = record.sharedWithPharmacies.find(
+      (share) => share.pharmacyId.toString() === pharmacyId
+    );
+
+    if (!shareRecord) {
+      throw new ApiError("No sharing request found for this pharmacy", 404);
+    }
+
+    shareRecord.approvalStatus = approvalStatus;
+    shareRecord.approvedAt = new Date();
+
+    await patient.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Health record access ${approvalStatus} successfully`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getPendingHealthRecordRequests = async (req, res, next) => {
+  try {
+    const pharmacyId = req.user.pharmacyId;
+
+    // Import Patient model here to avoid circular dependency
+    const Patient = (await import("../models/Patient.js")).default;
+
+    const patients = await Patient.find({
+      "medicalHistory.sharedWithPharmacies": {
+        $elemMatch: {
+          pharmacyId: pharmacyId,
+          approvalStatus: "pending",
+        },
+      },
+    }).select("firstName lastName phone medicalHistory");
+
+    const pendingRequests = [];
+
+    patients.forEach((patient) => {
+      patient.medicalHistory.forEach((record) => {
+        const pendingShare = record.sharedWithPharmacies.find(
+          (share) =>
+            share.pharmacyId.toString() === pharmacyId &&
+            share.approvalStatus === "pending"
+        );
+
+        if (pendingShare) {
+          pendingRequests.push({
+            patientId: patient._id,
+            patientName: `${patient.firstName} ${patient.lastName}`,
+            patientPhone: patient.phone,
+            recordId: record._id,
+            condition: record.condition,
+            diagnosedDate: record.diagnosedDate,
+            sharedAt: pendingShare.sharedAt,
+          });
+        }
+      });
+    });
+
+    res.status(200).json({
+      success: true,
+      data: pendingRequests,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getPatientMedicationHistory = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+    const pharmacyId = req.user.pharmacyId;
+
+    // Import models here to avoid circular dependency
+    const Patient = (await import("../models/Patient.js")).default;
+    const Order = (await import("../models/Order.js")).default;
+
+    // Get patient's current medications
+    const patient = await Patient.findById(patientId).select(
+      "currentMedications prescriptionHistory firstName lastName"
+    );
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    // Get orders fulfilled by this pharmacy for this patient
+    const orders = await Order.find({
+      patientId: patientId,
+      pharmacyId: pharmacyId,
+      status: { $in: ["delivered", "completed"] },
+    }).sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        patientName: `${patient.firstName} ${patient.lastName}`,
+        currentMedications: patient.currentMedications,
+        orderHistory: orders,
+        prescriptionHistory: patient.prescriptionHistory,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get shared health records from patients who have approved prescriptions with this pharmacy
+export const getSharedHealthRecords = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+
+    // Find pharmacy document using the user ID (same pattern as other functions)
+    const pharmacy = await Pharmacy.findOne({ userId: req.user.id });
+    if (!pharmacy) {
+      throw new ApiError("Pharmacy not found for this user", 404);
+    }
+
+    const pharmacyId = pharmacy._id;
+
+    const Patient = (await import("../models/Patient.js")).default;
+
+    // Get patient with health records shared with this pharmacy
+    const patient = await Patient.findById(patientId).select(
+      "firstName lastName medicalHistory allergies currentMedications vitalSigns emergencyContacts"
+    );
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Patient found: ${patient.firstName} ${patient.lastName}`
+    );
+    console.log(`[SHARED_HEALTH_RECORDS] Patient health records available:`, {
+      medicalHistory: patient.medicalHistory?.length || 0,
+      allergies: patient.allergies?.length || 0,
+      currentMedications: patient.currentMedications?.length || 0,
+      vitalSigns: patient.vitalSigns?.length || 0,
+      emergencyContacts: patient.emergencyContacts?.length || 0,
+    });
+
+    // Filter records that are shared with this pharmacy and approved
+    const sharedMedicalHistory = (patient.medicalHistory || []).filter(
+      (record) => {
+        const share = record.sharedWithPharmacies?.find(
+          (share) =>
+            share.pharmacyId.toString() === pharmacyId.toString() &&
+            share.approvalStatus === "approved"
+        );
+        return share;
+      }
+    );
+
+    const sharedAllergies = (patient.allergies || []).filter((record) => {
+      const share = record.sharedWithPharmacies?.find(
+        (share) =>
+          share.pharmacyId.toString() === pharmacyId.toString() &&
+          share.approvalStatus === "approved"
+      );
+      return share;
+    });
+
+    const sharedCurrentMedications = (patient.currentMedications || []).filter(
+      (record) => {
+        const share = record.sharedWithPharmacies?.find(
+          (share) =>
+            share.pharmacyId.toString() === pharmacyId.toString() &&
+            share.approvalStatus === "approved"
+        );
+        return share;
+      }
+    );
+
+    const sharedVitalSigns = (patient.vitalSigns || []).filter((record) => {
+      const share = record.sharedWithPharmacies?.find(
+        (share) =>
+          share.pharmacyId.toString() === pharmacyId.toString() &&
+          share.approvalStatus === "approved"
+      );
+      return share;
+    });
+
+    const sharedEmergencyContacts = (patient.emergencyContacts || []).filter(
+      (record) => {
+        const share = record.sharedWithPharmacies?.find(
+          (share) =>
+            share.pharmacyId.toString() === pharmacyId.toString() &&
+            share.approvalStatus === "approved"
+        );
+        return share;
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        patientName: `${patient.firstName} ${patient.lastName}`,
+        patientId: patient._id,
+        healthRecords: {
+          medicalHistory: sharedMedicalHistory,
+          allergies: sharedAllergies,
+          currentMedications: sharedCurrentMedications,
+          vitalSigns: sharedVitalSigns,
+          emergencyContacts: sharedEmergencyContacts,
+        },
+        recordCounts: {
+          medicalHistory: sharedMedicalHistory.length,
+          allergies: sharedAllergies.length,
+          currentMedications: sharedCurrentMedications.length,
+          vitalSigns: sharedVitalSigns.length,
+          emergencyContacts: sharedEmergencyContacts.length,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 };

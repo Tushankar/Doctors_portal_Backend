@@ -9,13 +9,22 @@ export const protect = async (req, res, next) => {
   let token;
 
   console.log("[AUTH] Incoming request cookies:", req.cookies);
+  console.log("[AUTH] Authorization header:", req.headers.authorization);
 
-  // Check for token in cookies
+  // Check for token in cookies first
   if (req.cookies.token) {
     token = req.cookies.token;
     console.log("[AUTH] Token found in cookies");
+  }
+  // Check for token in Authorization header
+  else if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith("Bearer")
+  ) {
+    token = req.headers.authorization.split(" ")[1];
+    console.log("[AUTH] Token found in Authorization header");
   } else {
-    console.log("[AUTH] No token found in cookies");
+    console.log("[AUTH] No token found in cookies or Authorization header");
   }
 
   if (!token) {

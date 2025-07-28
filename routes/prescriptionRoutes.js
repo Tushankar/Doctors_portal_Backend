@@ -288,4 +288,61 @@ router.delete("/:id", checkRole(["admin"]), async (req, res, next) => {
   }
 });
 
+// Admin route to fix missing fulfilledBy data
+router.post(
+  "/admin/fix-fulfilled-by",
+  checkRole(["admin"]),
+  async (req, res, next) => {
+    try {
+      const result = await prescriptionController.fixMissingFulfilledByData();
+      res.json({
+        success: true,
+        message: `Fixed fulfilledBy data for ${result.fixed} prescriptions`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Admin route to fix pharmacy approval statuses
+router.post(
+  "/admin/fix-pharmacy-statuses",
+  checkRole(["admin"]),
+  async (req, res, next) => {
+    try {
+      // Import Pharmacy model
+      const Pharmacy = (await import("../models/Pharmacy.js")).default;
+
+      // Find all pharmacies that are active but have pending status
+      const pharmaciesToUpdate = await Pharmacy.find({
+        approvalStatus: "pending",
+        isActive: { $ne: false },
+      });
+
+      let updatedCount = 0;
+      for (const pharmacy of pharmaciesToUpdate) {
+        await Pharmacy.findByIdAndUpdate(pharmacy._id, {
+          approvalStatus: "approved",
+          approvedAt: pharmacy.approvedAt || pharmacy.createdAt,
+        });
+        updatedCount++;
+      }
+
+      res.json({
+        success: true,
+        message: `Updated approval status for ${updatedCount} pharmacies`,
+        data: {
+          totalFound: pharmaciesToUpdate.length,
+          updated: updatedCount,
+        },
+      });
+    } catch (error) {
+      console.error("Error fixing pharmacy statuses:", error);
+      next(error);
+    }
+  }
+);
+
 export default router;

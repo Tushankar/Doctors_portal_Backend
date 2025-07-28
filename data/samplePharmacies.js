@@ -31,6 +31,10 @@ const samplePharmacies = [
     services: ["prescription_filling", "consultation", "home_delivery"],
     deliveryAvailable: true,
     deliveryRadius: 10,
+    // Approval status - should be set when pharmacy is approved by admin
+    approvalStatus: "approved",
+    approvedAt: new Date(),
+    isActive: true,
   },
   {
     pharmacyName: "MedPlus Pharmacy",
@@ -61,6 +65,10 @@ const samplePharmacies = [
     services: ["prescription_filling", "medication_therapy_management"],
     deliveryAvailable: true,
     deliveryRadius: 8,
+    // Approval status - should be set when pharmacy is approved by admin
+    approvalStatus: "approved",
+    approvedAt: new Date(),
+    isActive: true,
   },
   {
     pharmacyName: "1mg Pharmacy",
@@ -91,6 +99,10 @@ const samplePharmacies = [
     services: ["prescription_filling", "home_delivery", "consultation"],
     deliveryAvailable: true,
     deliveryRadius: 15,
+    // Approval status - should be set when pharmacy is approved by admin
+    approvalStatus: "approved",
+    approvedAt: new Date(),
+    isActive: true,
   },
 ];
 

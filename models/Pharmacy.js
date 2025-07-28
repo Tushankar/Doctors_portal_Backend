@@ -327,6 +327,11 @@ PharmacySchema.statics.findNearby = function (
   latitude,
   maxDistance = 10000
 ) {
+  // Validate coordinates
+  if (isNaN(longitude) || isNaN(latitude)) {
+    throw new Error("Invalid coordinates provided");
+  }
+
   return this.find({
     location: {
       $near: {

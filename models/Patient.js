@@ -40,18 +40,125 @@ const patientSchema = new mongoose.Schema({
   },
   medicalHistory: [
     {
-      condition: String,
-      diagnosedDate: Date,
+      condition: {
+        type: String,
+        required: true,
+      },
+      diagnosedDate: {
+        type: Date,
+        required: true,
+      },
       status: {
         type: String,
-        enum: ["active", "resolved"],
+        enum: ["active", "resolved", "monitoring"],
         default: "active",
       },
+      doctor: String,
       notes: String,
       attachments: [String], // URLs to medical documents
+      createdAt: {
+        type: Date,
+        default: Date.now,
+      },
+      updatedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      sharedWithPharmacies: [
+        {
+          pharmacyId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Pharmacy",
+          },
+          sharedAt: {
+            type: Date,
+            default: Date.now,
+          },
+          approvalStatus: {
+            type: String,
+            enum: ["pending", "approved", "rejected"],
+            default: "pending",
+          },
+        },
+      ],
     },
   ],
-  allergies: [String],
+  allergies: [
+    {
+      allergen: {
+        type: String,
+        required: true,
+      },
+      severity: {
+        type: String,
+        enum: ["mild", "moderate", "severe"],
+        default: "moderate",
+      },
+      reaction: String,
+      notes: String,
+      addedAt: {
+        type: Date,
+        default: Date.now,
+      },
+    },
+  ],
+  chronicConditions: [
+    {
+      condition: String,
+      diagnosedDate: Date,
+      managementPlan: String,
+      medications: [String],
+      notes: String,
+    },
+  ],
+  vitalSigns: [
+    {
+      bloodPressure: {
+        systolic: Number,
+        diastolic: Number,
+      },
+      heartRate: Number,
+      temperature: Number,
+      weight: Number,
+      height: Number,
+      oxygenSaturation: Number,
+      recordedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      recordedBy: String, // doctor, nurse, self-reported
+      notes: String,
+    },
+  ],
+  labResults: [
+    {
+      testName: String,
+      testDate: Date,
+      results: [
+        {
+          parameter: String,
+          value: String,
+          unit: String,
+          referenceRange: String,
+          status: {
+            type: String,
+            enum: ["normal", "abnormal", "critical"],
+          },
+        },
+      ],
+      orderedBy: String,
+      labName: String,
+      attachments: [String],
+    },
+  ],
+  insuranceInfo: {
+    provider: String,
+    policyNumber: String,
+    groupNumber: String,
+    coverageType: String,
+    validUntil: Date,
+    copayAmount: Number,
+  },
   currentMedications: [
     {
       name: String,

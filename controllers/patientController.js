@@ -165,7 +165,7 @@ export const getPrescriptionHistory = async (req, res) => {
     })
     .populate({
       path: "prescriptionHistory.fulfilledBy",
-      select: "pharmacyName address phone email",
+      select: "_id pharmacyName address phone email contactInfo",
     });
 
   if (!patient) {
@@ -327,14 +327,53 @@ export const updateChatUnreadCount = async (req, res) => {
 export const discoverNearbyPharmacies = async (req, res, next) => {
   try {
     const { longitude, latitude, radius } = req.query;
+
+    // Validate coordinates
+    const lng = parseFloat(longitude);
+    const lat = parseFloat(latitude);
+
+    if (isNaN(lng) || isNaN(lat)) {
+      // If coordinates are not provided or invalid, return all pharmacies
+      const allPharmacies = await Pharmacy.find({ isActive: true })
+        .select(
+          "pharmacyName address phone email location coordinates isActive"
+        )
+        .limit(20);
+
+      return res.status(200).json({
+        success: true,
+        data: allPharmacies,
+        message: "Showing all available pharmacies (location not provided)",
+      });
+    }
+
+    // If coordinates are valid, find nearby pharmacies
     const nearby = await Pharmacy.findNearby(
-      parseFloat(longitude),
-      parseFloat(latitude),
+      lng,
+      lat,
       radius ? parseInt(radius) : undefined
     );
+
     res.status(200).json({ success: true, data: nearby });
   } catch (error) {
-    next(error);
+    console.error("Error in discoverNearbyPharmacies:", error);
+
+    // Fallback: return all pharmacies if nearby search fails
+    try {
+      const allPharmacies = await Pharmacy.find({ isActive: true })
+        .select(
+          "pharmacyName address phone email location coordinates isActive"
+        )
+        .limit(20);
+
+      res.status(200).json({
+        success: true,
+        data: allPharmacies,
+        message: "Showing all available pharmacies (nearby search failed)",
+      });
+    } catch (fallbackError) {
+      next(fallbackError);
+    }
   }
 };
 
@@ -383,6 +422,342 @@ export const getPaymentHistory = async (req, res, next) => {
     const patient = await Patient.findById(req.user.id);
     const payments = patient.paymentHistory || [];
     res.status(200).json({ success: true, data: payments });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Health Records Management
+export const getHealthRecords = async (req, res, next) => {
+  try {
+    const patient = await Patient.findById(req.user.id).select(
+      "medicalHistory allergies currentMedications vitalSigns emergencyContact insuranceInfo chronicConditions labResults"
+    );
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    const healthRecords = {
+      medicalHistory: patient.medicalHistory || [],
+      allergies: patient.allergies || [],
+      currentMedications: patient.currentMedications || [],
+      vitalSigns: patient.vitalSigns || [],
+      emergencyContact: patient.emergencyContact || {},
+      insuranceInfo: patient.insuranceInfo || {},
+      chronicConditions: patient.chronicConditions || [],
+      labResults: patient.labResults || [],
+    };
+
+    res.status(200).json({
+      success: true,
+      data: healthRecords,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const addHealthRecord = async (req, res, next) => {
+  try {
+    const { type, ...recordData } = req.body;
+    const patient = await Patient.findById(req.user.id);
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    let newRecord;
+
+    switch (type) {
+      case "medical-history":
+        newRecord = {
+          condition: recordData.condition,
+          diagnosedDate: recordData.diagnosedDate,
+          status: recordData.status || "active",
+          doctor: recordData.doctor,
+          notes: recordData.notes,
+          attachments: recordData.attachments || [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          sharedWithPharmacies: [],
+        };
+        patient.medicalHistory.push(newRecord);
+        break;
+
+      case "medication":
+        newRecord = {
+          name: recordData.name,
+          dosage: recordData.dosage,
+          frequency: recordData.frequency,
+          startDate: recordData.startDate,
+          endDate: recordData.endDate,
+          prescriptionId: recordData.prescriptionId,
+          refillReminders: recordData.refillReminders || { enabled: false },
+        };
+        patient.currentMedications.push(newRecord);
+        break;
+
+      case "allergy":
+        newRecord = {
+          allergen: recordData.allergen,
+          severity: recordData.severity || "moderate",
+          reaction: recordData.reaction,
+          notes: recordData.notes,
+          addedAt: new Date(),
+        };
+        patient.allergies.push(newRecord);
+        break;
+
+      case "vital-signs":
+        newRecord = {
+          bloodPressure: recordData.bloodPressure,
+          heartRate: recordData.heartRate,
+          temperature: recordData.temperature,
+          weight: recordData.weight,
+          height: recordData.height,
+          oxygenSaturation: recordData.oxygenSaturation,
+          recordedAt: recordData.recordedAt || new Date(),
+          recordedBy: recordData.recordedBy || "self-reported",
+          notes: recordData.notes,
+        };
+        patient.vitalSigns.push(newRecord);
+        break;
+
+      case "emergency-contact":
+        patient.emergencyContact = {
+          name: recordData.name,
+          relationship: recordData.relationship,
+          phone: recordData.phone,
+        };
+        newRecord = patient.emergencyContact;
+        break;
+
+      case "insurance":
+        patient.insuranceInfo = {
+          provider: recordData.provider,
+          policyNumber: recordData.policyNumber,
+          groupNumber: recordData.groupNumber,
+          coverageType: recordData.coverageType,
+          validUntil: recordData.validUntil,
+          copayAmount: recordData.copayAmount,
+        };
+        newRecord = patient.insuranceInfo;
+        break;
+
+      default:
+        throw new ApiError("Invalid record type", 400);
+    }
+
+    await patient.save();
+
+    res.status(201).json({
+      success: true,
+      data: newRecord,
+      message: "Health record added successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateHealthRecord = async (req, res, next) => {
+  try {
+    const { type, recordId } = req.params;
+    const updateData = req.body;
+    const patient = await Patient.findById(req.user.id);
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    let updatedRecord;
+
+    switch (type) {
+      case "medical-history":
+        const medicalIndex = patient.medicalHistory.findIndex(
+          (record) => record._id.toString() === recordId
+        );
+        if (medicalIndex === -1) {
+          throw new ApiError("Medical history record not found", 404);
+        }
+        Object.assign(patient.medicalHistory[medicalIndex], updateData);
+        patient.medicalHistory[medicalIndex].updatedAt = new Date();
+        updatedRecord = patient.medicalHistory[medicalIndex];
+        break;
+
+      case "medication":
+        const medicationIndex = patient.currentMedications.findIndex(
+          (record) => record._id.toString() === recordId
+        );
+        if (medicationIndex === -1) {
+          throw new ApiError("Medication record not found", 404);
+        }
+        Object.assign(patient.currentMedications[medicationIndex], updateData);
+        updatedRecord = patient.currentMedications[medicationIndex];
+        break;
+
+      case "vital-signs":
+        const vitalIndex = patient.vitalSigns.findIndex(
+          (record) => record._id.toString() === recordId
+        );
+        if (vitalIndex === -1) {
+          throw new ApiError("Vital signs record not found", 404);
+        }
+        Object.assign(patient.vitalSigns[vitalIndex], updateData);
+        updatedRecord = patient.vitalSigns[vitalIndex];
+        break;
+
+      default:
+        throw new ApiError("Invalid record type", 400);
+    }
+
+    await patient.save();
+
+    res.status(200).json({
+      success: true,
+      data: updatedRecord,
+      message: "Health record updated successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteHealthRecord = async (req, res, next) => {
+  try {
+    const { type, recordId } = req.params;
+    const patient = await Patient.findById(req.user.id);
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    switch (type) {
+      case "medical-history":
+        patient.medicalHistory = patient.medicalHistory.filter(
+          (record) => record._id.toString() !== recordId
+        );
+        break;
+
+      case "medication":
+        patient.currentMedications = patient.currentMedications.filter(
+          (record) => record._id.toString() !== recordId
+        );
+        break;
+
+      case "allergy":
+        patient.allergies = patient.allergies.filter(
+          (record) => record._id.toString() !== recordId
+        );
+        break;
+
+      case "vital-signs":
+        patient.vitalSigns = patient.vitalSigns.filter(
+          (record) => record._id.toString() !== recordId
+        );
+        break;
+
+      default:
+        throw new ApiError("Invalid record type", 400);
+    }
+
+    await patient.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Health record deleted successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const shareHealthRecordWithPharmacy = async (req, res, next) => {
+  try {
+    const { pharmacyId, recordIds, recordType } = req.body;
+    const patient = await Patient.findById(req.user.id);
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    // Verify pharmacy exists
+    const pharmacy = await Pharmacy.findById(pharmacyId);
+    if (!pharmacy) {
+      throw new ApiError("Pharmacy not found", 404);
+    }
+
+    // Share medical history records
+    if (recordType === "medical-history") {
+      recordIds.forEach((recordId) => {
+        const record = patient.medicalHistory.id(recordId);
+        if (record) {
+          const existingShare = record.sharedWithPharmacies.find(
+            (share) => share.pharmacyId.toString() === pharmacyId
+          );
+
+          if (!existingShare) {
+            record.sharedWithPharmacies.push({
+              pharmacyId: pharmacyId,
+              sharedAt: new Date(),
+              approvalStatus: "pending",
+            });
+          }
+        }
+      });
+    }
+
+    await patient.save();
+
+    // Create notification for pharmacy (if notification system exists)
+    // TODO: Implement notification system
+
+    res.status(200).json({
+      success: true,
+      message: "Health records shared with pharmacy successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getSharedHealthRecords = async (req, res, next) => {
+  try {
+    const { pharmacyId } = req.params;
+    const patient = await Patient.findById(req.user.id);
+
+    if (!patient) {
+      throw new ApiError("Patient not found", 404);
+    }
+
+    // Get medical history records shared with this pharmacy
+    const sharedMedicalHistory = patient.medicalHistory.filter((record) =>
+      record.sharedWithPharmacies.some(
+        (share) => share.pharmacyId.toString() === pharmacyId
+      )
+    );
+
+    // Get current medications (always shared for prescription fulfillment)
+    const sharedMedications = patient.currentMedications;
+
+    // Get relevant allergies (always shared for safety)
+    const sharedAllergies = patient.allergies;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        medicalHistory: sharedMedicalHistory,
+        currentMedications: sharedMedications,
+        allergies: sharedAllergies,
+        patientInfo: {
+          name: `${patient.firstName} ${patient.lastName}`,
+          phone: patient.phone,
+          dateOfBirth: patient.dateOfBirth,
+          emergencyContact: patient.emergencyContact,
+        },
+      },
+    });
   } catch (error) {
     next(error);
   }

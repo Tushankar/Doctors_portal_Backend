@@ -162,9 +162,12 @@ class OrderController {
       }
 
       const order = await Order.findOne(query)
-        .populate("patientId", "firstName lastName email phone")
+        .populate("patientId", "firstName lastName email phone address")
         .populate("pharmacyId", "pharmacyName contactInfo address")
-        .populate("prescriptionId", "description ocrData.medications")
+        .populate(
+          "prescriptionId",
+          "description ocrData createdAt uploadedAt validationResults"
+        )
         .populate("statusHistory.updatedBy", "firstName lastName email");
 
       if (!order) {
@@ -185,44 +188,116 @@ class OrderController {
    */
   async getOrdersByPharmacy(userId, status = null, page = 1, limit = 10) {
     try {
-      // Get pharmacy from user
-      const pharmacy = await Pharmacy.findOne({ userId });
-      if (!pharmacy) throw new Error("Pharmacy not found");
+      console.log(
+        `[GET_PHARMACY_ORDERS] Looking for pharmacy with userId: ${userId}`
+      );
+
+      // Get pharmacy from user - FIXED: Use correct field name
+      const pharmacy = await Pharmacy.findOne({ userId: userId });
+      if (!pharmacy) {
+        console.log(
+          `[GET_PHARMACY_ORDERS] No pharmacy found for userId: ${userId}`
+        );
+
+        // Try alternative lookup in case userId field is stored differently
+        const pharmacyAlt = await Pharmacy.findById(userId);
+        if (!pharmacyAlt) {
+          console.log(
+            `[GET_PHARMACY_ORDERS] No pharmacy found with _id: ${userId} either`
+          );
+          throw new Error("Pharmacy not found");
+        }
+        console.log(
+          `[GET_PHARMACY_ORDERS] Found pharmacy by _id: ${pharmacyAlt._id} (${pharmacyAlt.pharmacyName})`
+        );
+
+        // Use the alternative pharmacy
+        const query = { pharmacyId: pharmacyAlt._id };
+        if (status) query.status = status;
+
+        console.log(`[GET_PHARMACY_ORDERS] Query:`, query);
+
+        const skip = (page - 1) * limit;
+        const [orders, totalCount] = await Promise.all([
+          Order.find(query)
+            .populate("patientId", "firstName lastName email phone address")
+            .populate(
+              "prescriptionId",
+              "description ocrData createdAt uploadedAt validationResults"
+            )
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit),
+          Order.countDocuments(query),
+        ]);
+
+        console.log(
+          `[GET_PHARMACY_ORDERS] Found ${orders.length} orders out of ${totalCount} total`
+        );
+
+        return {
+          success: true,
+          data: {
+            orders,
+            pagination: {
+              page,
+              limit,
+              total: totalCount,
+              pages: Math.ceil(totalCount / limit),
+            },
+          },
+        };
+      }
+
+      console.log(
+        `[GET_PHARMACY_ORDERS] Found pharmacy: ${pharmacy._id} (${pharmacy.pharmacyName})`
+      );
 
       // Build query
       const query = { pharmacyId: pharmacy._id };
       if (status) query.status = status;
 
+      console.log(`[GET_PHARMACY_ORDERS] Query:`, query);
+
       // Calculate pagination
       const skip = (page - 1) * limit;
 
-      // Get orders
+      // Get orders with better sorting and limit handling
       const [orders, totalCount] = await Promise.all([
         Order.find(query)
-          .populate("patientId", "firstName lastName email phone")
+          .populate("patientId", "firstName lastName email phone address")
           .populate(
             "prescriptionId",
-            "description ocrData.medications createdAt"
+            "description ocrData createdAt uploadedAt validationResults"
           )
-          .sort({ createdAt: -1 })
+          .sort({ createdAt: -1 }) // Most recent first
           .skip(skip)
-          .limit(limit),
+          .limit(parseInt(limit)), // Ensure limit is integer
         Order.countDocuments(query),
       ]);
+
+      console.log(
+        `[GET_PHARMACY_ORDERS] Found ${orders.length} orders out of ${totalCount} total`
+      );
+      console.log(
+        `[GET_PHARMACY_ORDERS] Orders IDs:`,
+        orders.map((o) => o._id)
+      );
 
       return {
         success: true,
         data: {
           orders,
           pagination: {
-            page,
-            limit,
+            page: parseInt(page),
+            limit: parseInt(limit),
             total: totalCount,
-            pages: Math.ceil(totalCount / limit),
+            pages: Math.ceil(totalCount / parseInt(limit)),
           },
         },
       };
     } catch (error) {
+      console.error(`[GET_PHARMACY_ORDERS] Error: ${error.message}`);
       throw new Error(error.message || "Failed to get pharmacy orders");
     }
   }
@@ -245,7 +320,7 @@ class OrderController {
           .populate("pharmacyId", "pharmacyName contactInfo address")
           .populate(
             "prescriptionId",
-            "description ocrData.medications createdAt"
+            "description ocrData createdAt uploadedAt validationResults"
           )
           .sort({ createdAt: -1 })
           .skip(skip)

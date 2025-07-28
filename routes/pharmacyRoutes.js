@@ -7,6 +7,11 @@ import {
   getNearbyPharmacies,
   getPharmacyDetails,
   getPharmacyInventory,
+  getPatientHealthRecords,
+  approveHealthRecordAccess,
+  getPendingHealthRecordRequests,
+  getPatientMedicationHistory,
+  getSharedHealthRecords,
 } from "../controllers/pharmacyController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize as checkRole } from "../middleware/roleMiddleware.js";
@@ -213,5 +218,67 @@ router.get("/:id/inventory", async (req, res) => {
       .json({ success: false, message: error.message });
   }
 });
+
+// Health Records Management Routes for Pharmacies
+router.get(
+  "/patients/:patientId/health-records",
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      await getPatientHealthRecords(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  "/patients/:patientId/medication-history",
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      await getPatientMedicationHistory(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  "/health-records/pending",
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      await getPendingHealthRecordRequests(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.put(
+  "/patients/:patientId/health-records/:recordId/approve",
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      await approveHealthRecordAccess(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Get shared health records for a specific patient
+router.get(
+  "/patients/:patientId/shared-health-records",
+  checkRole(["pharmacy"]),
+  async (req, res, next) => {
+    try {
+      await getSharedHealthRecords(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 export default router;
