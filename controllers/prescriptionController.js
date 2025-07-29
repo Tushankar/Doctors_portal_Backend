@@ -6,6 +6,11 @@ import { fileUploadService } from "./fileUploadController.js";
 import Pharmacy from "../models/Pharmacy.js";
 import Patient from "../models/Patient.js";
 import { orderController } from "./orderController.js";
+import {
+  createPrescriptionApprovalNotification,
+  createNewOrderNotification,
+} from "./advancedNotificationController.js";
+import AdvancedNotification from "../models/AdvancedNotification.js";
 
 class PrescriptionController {
   constructor() {
@@ -23,6 +28,440 @@ class PrescriptionController {
     this.getIncomingRequests = this.getIncomingRequests.bind(this);
     this.getPrescriptionWithOrder = this.getPrescriptionWithOrder.bind(this);
   }
+
+  // =============== NOTIFICATION HELPER METHODS ===============
+
+  /**
+   * Create notification when prescription is uploaded
+   */
+  async createPrescriptionUploadedNotification(prescription, nearbyPharmacies) {
+    try {
+      console.log("📤 Creating prescription uploaded notifications...");
+
+      const patient = await Patient.findById(prescription.patientId);
+      if (!patient) return;
+
+      // Notify patient that prescription was uploaded successfully
+      const patientNotification = new AdvancedNotification({
+        title: "Prescription Uploaded Successfully! 📋",
+        message: `Your prescription has been uploaded and sent to ${nearbyPharmacies.length} nearby pharmacies for approval. You'll be notified when pharmacies respond.`,
+        type: "prescription_ready",
+        priority: "medium",
+        recipients: [
+          {
+            userId: prescription.patientId,
+            userRole: "patient",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            status: "uploaded",
+            pharmacyCount: nearbyPharmacies.length,
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: { enabled: true },
+        },
+        content: {
+          actionButton: {
+            text: "View Prescription",
+            action: "navigate",
+            url: `/prescriptions/${prescription._id}`,
+          },
+          tags: ["prescription", "uploaded", "patient"],
+        },
+        createdBy: {
+          userId: prescription.patientId,
+          userRole: "patient",
+          isSystem: true,
+        },
+      });
+
+      await patientNotification.save();
+
+      // Notify nearby pharmacies about new prescription request
+      for (const pharmacy of nearbyPharmacies) {
+        const pharmacyNotification = new AdvancedNotification({
+          title: "New Prescription Request! 🏥",
+          message: `New prescription request from ${patient.firstName} ${patient.lastName}. Please review and respond.`,
+          type: "new_order",
+          priority: "high",
+          recipients: [
+            {
+              userId: pharmacy.userId,
+              userRole: "pharmacy",
+              deliveryStatus: "pending",
+            },
+          ],
+          referenceData: {
+            referenceId: prescription._id,
+            referenceType: "prescription",
+            metadata: {
+              prescriptionId: prescription._id,
+              patientName: `${patient.firstName} ${patient.lastName}`,
+              patientId: prescription.patientId,
+              status: "pending_approval",
+            },
+          },
+          channels: {
+            inApp: { enabled: true },
+            email: { enabled: true },
+          },
+          content: {
+            actionButton: {
+              text: "Review Prescription",
+              action: "navigate",
+              url: `/pharmacy/prescriptions/${prescription._id}`,
+            },
+            tags: ["prescription", "new_request", "pharmacy"],
+          },
+          createdBy: {
+            userId: prescription.patientId,
+            userRole: "patient",
+            isSystem: true,
+          },
+        });
+
+        await pharmacyNotification.save();
+      }
+
+      console.log(
+        `✅ Created prescription upload notifications for patient and ${nearbyPharmacies.length} pharmacies`
+      );
+    } catch (error) {
+      console.error(
+        "❌ Error creating prescription upload notifications:",
+        error
+      );
+    }
+  }
+
+  /**
+   * Create notification when prescription processing is complete
+   */
+  async createPrescriptionProcessedNotification(prescription) {
+    try {
+      console.log("🔄 Creating prescription processed notification...");
+
+      const notification = new AdvancedNotification({
+        title: "Prescription Processing Complete! ✅",
+        message: `Your prescription has been processed and analyzed. ${
+          prescription.ocrData?.medications?.length || 0
+        } medications were identified.`,
+        type: "prescription_ready",
+        priority: "medium",
+        recipients: [
+          {
+            userId: prescription.patientId,
+            userRole: "patient",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            status: "processed",
+            medicationCount: prescription.ocrData?.medications?.length || 0,
+            confidence: prescription.ocrData?.confidence || 0,
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: { enabled: true },
+        },
+        content: {
+          actionButton: {
+            text: "View Results",
+            action: "navigate",
+            url: `/prescriptions/${prescription._id}`,
+          },
+          tags: ["prescription", "processed", "patient"],
+        },
+        createdBy: {
+          isSystem: true,
+        },
+      });
+
+      await notification.save();
+      console.log("✅ Created prescription processed notification");
+    } catch (error) {
+      console.error(
+        "❌ Error creating prescription processed notification:",
+        error
+      );
+    }
+  }
+
+  /**
+   * Create notification when pharmacy responds to prescription approval
+   */
+  async createPharmacyResponseNotification(prescription, pharmacy, status) {
+    try {
+      console.log(`💊 Creating pharmacy response notification (${status})...`);
+
+      const isApproved = status === "approved";
+      const title = isApproved
+        ? "Prescription Approved by Pharmacy! ✅"
+        : "Prescription Response from Pharmacy 📋";
+
+      const message = isApproved
+        ? `Great news! ${pharmacy.pharmacyName} has approved your prescription. You can now proceed with ordering.`
+        : `${pharmacy.pharmacyName} has responded to your prescription request. Check the details for next steps.`;
+
+      const notification = new AdvancedNotification({
+        title,
+        message,
+        type: "approval",
+        priority: isApproved ? "high" : "medium",
+        recipients: [
+          {
+            userId: prescription.patientId,
+            userRole: "patient",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            pharmacyId: pharmacy._id,
+            pharmacyName: pharmacy.pharmacyName,
+            approvalStatus: status,
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: { enabled: true },
+        },
+        content: {
+          actionButton: {
+            text: isApproved ? "Place Order" : "View Details",
+            action: "navigate",
+            url: `/prescriptions/${prescription._id}`,
+          },
+          tags: ["prescription", "pharmacy_response", "patient"],
+        },
+        createdBy: {
+          userId: pharmacy.userId,
+          userRole: "pharmacy",
+          isSystem: false,
+        },
+      });
+
+      await notification.save();
+      console.log("✅ Created pharmacy response notification");
+    } catch (error) {
+      console.error("❌ Error creating pharmacy response notification:", error);
+    }
+  }
+
+  /**
+   * Create notification when patient selects pharmacy for fulfillment
+   */
+  async createPharmacySelectedNotification(prescription, pharmacy) {
+    try {
+      console.log("🎯 Creating pharmacy selected notifications...");
+
+      const patient = await Patient.findById(prescription.patientId);
+      if (!patient) return;
+
+      // Notify patient about selection confirmation
+      const patientNotification = new AdvancedNotification({
+        title: "Pharmacy Selected! 🏪",
+        message: `You've selected ${pharmacy.pharmacyName} for your prescription fulfillment. They will prepare your order.`,
+        type: "order_status",
+        priority: "medium",
+        recipients: [
+          {
+            userId: prescription.patientId,
+            userRole: "patient",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            pharmacyId: pharmacy._id,
+            pharmacyName: pharmacy.pharmacyName,
+            status: "pharmacy_selected",
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: { enabled: true },
+        },
+        content: {
+          actionButton: {
+            text: "Track Order",
+            action: "navigate",
+            url: `/prescriptions/${prescription._id}`,
+          },
+          tags: ["prescription", "pharmacy_selected", "patient"],
+        },
+        createdBy: {
+          userId: prescription.patientId,
+          userRole: "patient",
+          isSystem: false,
+        },
+      });
+
+      // Notify pharmacy about being selected
+      const pharmacyNotification = new AdvancedNotification({
+        title: "Patient Selected Your Pharmacy! 🎉",
+        message: `${patient.firstName} ${patient.lastName} has selected your pharmacy for prescription fulfillment. Please prepare the order.`,
+        type: "new_order",
+        priority: "high",
+        recipients: [
+          {
+            userId: pharmacy.userId,
+            userRole: "pharmacy",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            patientName: `${patient.firstName} ${patient.lastName}`,
+            patientId: prescription.patientId,
+            status: "selected_for_fulfillment",
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: { enabled: true },
+        },
+        content: {
+          actionButton: {
+            text: "Prepare Order",
+            action: "navigate",
+            url: `/pharmacy/orders/${prescription._id}`,
+          },
+          tags: ["prescription", "selected", "pharmacy"],
+        },
+        createdBy: {
+          userId: prescription.patientId,
+          userRole: "patient",
+          isSystem: false,
+        },
+      });
+
+      await Promise.all([
+        patientNotification.save(),
+        pharmacyNotification.save(),
+      ]);
+      console.log(
+        "✅ Created pharmacy selected notifications for both patient and pharmacy"
+      );
+    } catch (error) {
+      console.error(
+        "❌ Error creating pharmacy selected notifications:",
+        error
+      );
+    }
+  }
+
+  /**
+   * Create notification when prescription status is updated
+   */
+  async createStatusUpdateNotification(prescription, newStatus, oldStatus) {
+    try {
+      console.log(
+        `📱 Creating status update notification: ${oldStatus} → ${newStatus}`
+      );
+
+      const statusMessages = {
+        processing: "Your prescription is being processed and analyzed.",
+        pending_approval:
+          "Your prescription has been sent to pharmacies for approval.",
+        processed:
+          "Your prescription analysis is complete. Waiting for pharmacy responses.",
+        accepted: "Your prescription has been accepted by the pharmacy.",
+        preparing: "Your prescription is being prepared by the pharmacy.",
+        ready: "Your prescription is ready for pickup or delivery!",
+        delivered: "Your prescription has been delivered successfully.",
+        cancelled: "Your prescription has been cancelled.",
+      };
+
+      const priorityMap = {
+        processing: "low",
+        pending_approval: "medium",
+        processed: "medium",
+        accepted: "high",
+        preparing: "medium",
+        ready: "urgent",
+        delivered: "high",
+        cancelled: "urgent",
+      };
+
+      const title = `Prescription ${newStatus
+        .replace("_", " ")
+        .toUpperCase()} 📋`;
+      const message =
+        statusMessages[newStatus] ||
+        `Your prescription status has been updated to ${newStatus}.`;
+
+      const notification = new AdvancedNotification({
+        title,
+        message,
+        type: "order_status",
+        priority: priorityMap[newStatus] || "medium",
+        recipients: [
+          {
+            userId: prescription.patientId,
+            userRole: "patient",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            newStatus,
+            oldStatus,
+            pharmacyId: prescription.pharmacyId,
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: {
+            enabled: newStatus === "ready" || newStatus === "delivered",
+          },
+          sms: { enabled: newStatus === "ready" || newStatus === "delivered" },
+        },
+        content: {
+          actionButton: {
+            text: newStatus === "ready" ? "Arrange Pickup" : "View Details",
+            action: "navigate",
+            url: `/prescriptions/${prescription._id}`,
+          },
+          tags: ["prescription", "status_update", "patient"],
+        },
+        createdBy: {
+          isSystem: true,
+        },
+      });
+
+      await notification.save();
+      console.log("✅ Created status update notification");
+    } catch (error) {
+      console.error("❌ Error creating status update notification:", error);
+    }
+  }
+
+  // =============== END NOTIFICATION METHODS ===============
 
   /**
    * Create and process a new prescription
@@ -174,6 +613,17 @@ class PrescriptionController {
         "[CREATE_PRESCRIPTION] Updated prescription with approvalRequests"
       );
 
+      // Create notifications for prescription upload
+      try {
+        await this.createPrescriptionUploadedNotification(prescription, nearby);
+      } catch (notificationError) {
+        console.error(
+          "[CREATE_PRESCRIPTION] Notification error:",
+          notificationError
+        );
+        // Don't throw - prescription creation should succeed even if notifications fail
+      }
+
       return {
         success: true,
         message: "Prescription created and processing started",
@@ -303,6 +753,17 @@ class PrescriptionController {
             console.log(
               `[RESPOND_APPROVAL] Health records auto-shared with pharmacy ${pharmacyId}`
             );
+
+            // Send notification to patient about prescription approval
+            try {
+              await createPrescriptionApprovalNotification(
+                prescription.patientId,
+                prescriptionId,
+                pharmacyId
+              );
+            } catch (notificationError) {
+              // Continue execution even if notification fails
+            }
           } catch (orderError) {
             console.error(
               `[RESPOND_APPROVAL] Failed to create order: ${orderError.message}`
@@ -314,6 +775,25 @@ class PrescriptionController {
 
     await prescription.save();
     console.log(`[RESPOND_APPROVAL] Final status: ${prescription.status}`);
+
+    // Create comprehensive notification for pharmacy response
+    try {
+      const pharmacy = await Pharmacy.findById(pharmacyId);
+      if (pharmacy) {
+        await this.createPharmacyResponseNotification(
+          prescription,
+          pharmacy,
+          status
+        );
+      }
+    } catch (notificationError) {
+      console.error(
+        "[RESPOND_APPROVAL] Notification error:",
+        notificationError
+      );
+      // Don't throw - approval should succeed even if notifications fail
+    }
+
     return { success: true, message: `Request ${status}` };
   }
 
@@ -326,6 +806,16 @@ class PrescriptionController {
 
       // Import Order model here to avoid circular dependency
       const { Order } = await import("../models/Order.js");
+
+      // Get patient information for delivery address
+      let patient;
+      try {
+        patient = await Patient.findById(prescription.patientId).lean();
+      } catch (patientError) {
+        console.warn(
+          `[CREATE_ORDER] Could not fetch patient details: ${patientError.message}`
+        );
+      }
 
       // Extract medications from OCR data
       const ocrMedications = prescription.ocrData?.medications || [];
@@ -370,8 +860,13 @@ class PrescriptionController {
 
       const totalAmount = items.reduce((sum, item) => sum + item.totalPrice, 0);
 
+      // Generate unique order number
+      const orderNumber = `ORD${Date.now()}${Math.floor(Math.random() * 1000)
+        .toString()
+        .padStart(3, "0")}`;
+
       const orderData = {
-        orderNumber: `ORD${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        orderNumber: orderNumber, // Explicitly set order number
         prescriptionId: prescription._id,
         patientId: prescription.patientId,
         pharmacyId: pharmacyId,
@@ -381,33 +876,40 @@ class PrescriptionController {
         items: items,
         deliveryInfo: {
           address: {
-            street: "Patient Address", // TODO: Get from patient profile
-            city: "City",
-            state: "State",
-            zipCode: "000000",
+            street: patient?.address?.street || "Patient Address",
+            city: patient?.address?.city || "City",
+            state: patient?.address?.state || "State",
+            zipCode: patient?.address?.zipCode || "000000",
           },
-          phoneNumber: "+91XXXXXXXXXX", // TODO: Get from patient profile
+          phoneNumber:
+            patient?.phoneNumber ||
+            patient?.contactInfo?.phoneNumber ||
+            "+91XXXXXXXXXX",
           deliveryInstructions: "Auto-created order from prescription approval",
           deliveryFee: 10.0,
         },
         paymentInfo: {
-          method: "pending", // Let patient choose payment method
+          method: "cash", // Use valid enum value instead of "pending"
           status: "pending",
           copayAmount: 0.0,
         },
       };
 
       console.log(`[CREATE_ORDER] Order data:`, orderData);
+
+      // Create order and let pre-save middleware generate orderNumber
       const order = await Order.create(orderData);
       console.log(
-        `[CREATE_ORDER] Order created successfully: ${order._id} for pharmacy ${pharmacyId}`
+        `[CREATE_ORDER] Order created successfully: ${order._id} with orderNumber: ${order.orderNumber} for pharmacy ${pharmacyId}`
       );
 
       return order;
     } catch (error) {
       console.error(`[CREATE_ORDER] Failed to create order: ${error.message}`);
-      // Don't throw error here to prevent breaking the approval process
-      return null;
+      console.error(`[CREATE_ORDER] Full error:`, error);
+
+      // Throw error instead of returning null so selectPharmacy can handle it properly
+      throw error;
     }
   }
 
@@ -449,65 +951,168 @@ class PrescriptionController {
 
   // Patient select pharmacy for fulfillment
   async selectPharmacy(prescriptionId, patientId, pharmacyId) {
-    const prescription = await Prescription.findOne({
-      _id: prescriptionId,
+    console.log("[SELECT_PHARMACY] Start");
+    console.log("[SELECT_PHARMACY] Inputs:", {
+      prescriptionId,
       patientId,
+      pharmacyId,
     });
-    if (!prescription)
-      throw new Error("Prescription not found or unauthorized");
-    // ensure pharmacy approved
-    const approved = prescription.approvalRequests.find(
-      (a) =>
-        a.pharmacyId.toString() === pharmacyId.toString() &&
-        a.status === "approved"
-    );
-    if (!approved) throw new Error("Pharmacy not approved");
 
-    // Update prescription with selected pharmacy
-    prescription.pharmacyId = pharmacyId;
-    prescription.status = "accepted";
-    await prescription.save();
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    // Sync patient history status and fulfilledBy pharmacy
-    await this.syncPatientHistoryStatus(prescriptionId, "accepted", pharmacyId);
-
-    // Create an order for this prescription
     try {
-      const orderResult = await orderController.createOrder(
-        prescriptionId,
+      // Step 1: Fetch the prescription
+      const prescription = await Prescription.findOne({
+        _id: prescriptionId,
         patientId,
-        pharmacyId,
-        {
-          orderType: "pickup", // Default to pickup, can be changed later
-          paymentMethod: "cash", // Default payment method
-          isUrgent: false,
-        }
-      );
-      console.log(
-        `[SELECT_PHARMACY] Order created successfully: ${orderResult.data.orderNumber}`
-      );
-    } catch (orderError) {
-      console.error(
-        `[SELECT_PHARMACY] Failed to create order: ${orderError.message}`
-      );
-      // Don't fail the pharmacy selection if order creation fails
-    }
+      }).session(session);
 
-    // Populate pharmacy details for response
-    await prescription.populate(
-      "pharmacyId",
-      "pharmacyName contactInfo address"
-    );
+      if (!prescription) {
+        console.error(
+          "[SELECT_PHARMACY] Prescription not found or unauthorized",
+          { prescriptionId, patientId }
+        );
+        throw new Error("Prescription not found or unauthorized");
+      }
 
-    return {
-      success: true,
-      message: "Pharmacy selected successfully",
-      data: {
-        prescriptionId: prescription._id,
-        selectedPharmacy: prescription.pharmacyId,
+      console.log("[SELECT_PHARMACY] Prescription found:", {
+        id: prescription._id,
         status: prescription.status,
-      },
-    };
+      });
+
+      // Step 2: Check if pharmacy is approved
+      const approved = prescription.approvalRequests.find(
+        (a) =>
+          a.pharmacyId.toString() === pharmacyId.toString() &&
+          a.status === "approved"
+      );
+
+      if (!approved) {
+        console.warn(
+          "[SELECT_PHARMACY] Pharmacy not approved:",
+          pharmacyId.toString()
+        );
+        throw new Error("Pharmacy not approved");
+      }
+
+      console.log("[SELECT_PHARMACY] Pharmacy is approved");
+
+      // Step 3: Store original values for rollback
+      const originalPharmacyId = prescription.pharmacyId;
+      const originalStatus = prescription.status;
+
+      // Update prescription
+      prescription.pharmacyId = pharmacyId;
+      prescription.status = "accepted";
+
+      await prescription.save({ session });
+      console.log("[SELECT_PHARMACY] Prescription updated and saved:", {
+        newPharmacyId: pharmacyId,
+        newStatus: prescription.status,
+      });
+
+      // Step 4: Sync patient history
+      try {
+        await this.syncPatientHistoryStatus(
+          prescriptionId,
+          "accepted",
+          pharmacyId
+        );
+        console.log(
+          "[SELECT_PHARMACY] Patient history status synced successfully"
+        );
+      } catch (syncError) {
+        console.error(
+          "[SELECT_PHARMACY] Failed to sync patient history:",
+          syncError.message
+        );
+        // Don't throw here as this is not critical for the main flow
+      }
+
+      // Step 5: Create order - CRITICAL STEP
+      let orderResult;
+      try {
+        // Use our internal createOrderFromApproval method instead of orderController
+        orderResult = await this.createOrderFromApproval(
+          prescription,
+          pharmacyId
+        );
+
+        console.log(
+          "[SELECT_PHARMACY] Order created successfully:",
+          orderResult.orderNumber || orderResult._id
+        );
+      } catch (orderError) {
+        console.error(
+          "[SELECT_PHARMACY] Failed to create order:",
+          orderError.message
+        );
+
+        // Rollback prescription changes
+        console.log(
+          "[SELECT_PHARMACY] Rolling back prescription changes due to order creation failure"
+        );
+        throw new Error(`Failed to create order: ${orderError.message}`);
+      } // Step 6: Populate pharmacy details
+      try {
+        await prescription.populate(
+          "pharmacyId",
+          "pharmacyName contactInfo address"
+        );
+        console.log("[SELECT_PHARMACY] Populated pharmacy details");
+      } catch (populateError) {
+        console.error(
+          "[SELECT_PHARMACY] Failed to populate pharmacy details:",
+          populateError.message
+        );
+        // Don't throw here as this is not critical
+      }
+
+      // Commit transaction
+      await session.commitTransaction();
+      console.log("[SELECT_PHARMACY] Transaction committed successfully");
+
+      // Create notifications for pharmacy selection
+      try {
+        const pharmacy = await Pharmacy.findById(pharmacyId);
+        if (pharmacy) {
+          await this.createPharmacySelectedNotification(prescription, pharmacy);
+        }
+      } catch (notificationError) {
+        console.error(
+          "[SELECT_PHARMACY] Notification error:",
+          notificationError
+        );
+        // Don't throw - selection should succeed even if notifications fail
+      }
+
+      // Step 7: Return success response
+      const response = {
+        success: true,
+        message: "Pharmacy selected and order created successfully",
+        data: {
+          prescriptionId: prescription._id,
+          selectedPharmacy: prescription.pharmacyId,
+          status: prescription.status,
+          orderNumber: orderResult?.orderNumber,
+          orderId: orderResult?._id,
+        },
+      };
+
+      console.log("[SELECT_PHARMACY] Success response:", response);
+      return response;
+    } catch (error) {
+      await session.abortTransaction();
+      console.error(
+        "[SELECT_PHARMACY] Transaction aborted due to error:",
+        error.message
+      );
+      throw error;
+    } finally {
+      session.endSession();
+      console.log("[SELECT_PHARMACY] Session ended");
+    }
   }
 
   // Get prescription with order/fulfillment details for patient
@@ -551,7 +1156,7 @@ class PrescriptionController {
   }
 
   /**
-   * Process prescription with OCR and validation
+   * Process prescription with enhanced OCR and validation
    */
   async processPrescription(prescriptionId) {
     const startTime = Date.now();
@@ -569,49 +1174,83 @@ class PrescriptionController {
       prescription.status = "processing";
       await prescription.save();
 
-      // Perform OCR
+      console.log(
+        `🔄 Starting enhanced OCR processing for prescription ${prescriptionId}`
+      );
+
+      // Perform enhanced OCR with improved handwritten/digital text handling
       const ocrResult = await ocrService.processPrescriptionImage(
         prescription.originalFile.secureUrl,
-        { enhanced: true }
+        { enhanced: true, includeMetadata: true }
       );
-      // Match extracted medications against drug database
+
+      console.log(`📊 OCR processing completed:`, {
+        confidence: ocrResult.confidence,
+        textType: ocrResult.metadata?.textType,
+        approach: ocrResult.metadata?.ocrApproach,
+        medicationCount: ocrResult.medications?.length || 0,
+      });
+
+      // Enhanced medication matching with improved database lookup
       if (ocrResult && Array.isArray(ocrResult.medications)) {
+        console.log(
+          `🔍 Matching ${ocrResult.medications.length} medications against drug database...`
+        );
         ocrResult.medications = await matchDrugs(ocrResult.medications);
+
+        // Post-process medications with additional validation
+        ocrResult.medications = this.enhanceMedicationData(
+          ocrResult.medications,
+          ocrResult.metadata
+        );
       }
 
       prescription.ocrData = ocrResult;
-      console.log(
-        `processPrescription OCR result for ${prescriptionId}:`,
-        ocrResult
-      );
+      console.log(`processPrescription OCR result for ${prescriptionId}:`, {
+        status: ocrResult.processingStatus,
+        confidence: ocrResult.confidence,
+        medicationCount: ocrResult.medications?.length || 0,
+        warnings: ocrResult.warnings?.length || 0,
+      });
 
-      // Set validation results based on OCR output
+      // Enhanced validation results based on OCR output and metadata
       if (
         ocrResult.processingStatus === "completed" &&
         ocrResult.medications.length > 0
       ) {
-        prescription.validationResults = {
-          isValid: true,
-          flags: [],
-          aiConfidence: ocrResult.confidence || 0,
-          reviewRequired: false,
-          validatedAt: new Date(),
-        };
+        const validationResults =
+          this.generateEnhancedValidationResults(ocrResult);
+        prescription.validationResults = validationResults;
 
         // Check if any pharmacy has already approved this prescription
         const hasApprovedPharmacy = prescription.approvalRequests.some(
           (approval) => approval.status === "approved"
         );
 
-        // Set status to "processed" since OCR is complete (regardless of pharmacy approvals)
-        // OR if we have pharmacy approvals (even if OCR wasn't needed)
-        prescription.status = "processed";
+        // Set status based on validation quality and confidence
+        if (
+          validationResults.aiConfidence >= 0.7 &&
+          !validationResults.reviewRequired
+        ) {
+          prescription.status = "processed";
+        } else if (validationResults.aiConfidence >= 0.4) {
+          prescription.status = "pending_review";
+        } else {
+          prescription.status = "processing_failed";
+        }
 
         // Sync patient history status
-        await this.syncPatientHistoryStatus(prescriptionId, "processed");
+        await this.syncPatientHistoryStatus(
+          prescriptionId,
+          prescription.status
+        );
 
         console.log(
-          `[PROCESS_PRESCRIPTION] OCR completed for ${prescriptionId}. Status: ${prescription.status} (Has approvals: ${hasApprovedPharmacy})`
+          `[PROCESS_PRESCRIPTION] Enhanced OCR completed for ${prescriptionId}. Status: ${
+            prescription.status
+          } (Confidence: ${validationResults.aiConfidence.toFixed(
+            2
+          )}, Has approvals: ${hasApprovedPharmacy})`
         );
       } else {
         prescription.status = "processing_failed";
@@ -621,47 +1260,262 @@ class PrescriptionController {
             {
               type: "processing_error",
               severity: "high",
-              message: "Failed to extract medications from prescription",
+              message:
+                "Failed to extract medications from prescription using enhanced OCR",
               confidence: 1,
+              details:
+                ocrResult.processingError ||
+                "Unknown error during OCR processing",
             },
           ],
           aiConfidence: 0,
           reviewRequired: true,
           validatedAt: new Date(),
+          ocrMetadata: ocrResult.metadata,
         };
       }
 
       await prescription.save();
-      console.log(
-        `processPrescription completed for ${prescriptionId}; ocrData:`,
-        prescription.ocrData
-      );
 
       const processingTime = Date.now() - startTime;
+      console.log(
+        `processPrescription completed for ${prescriptionId} in ${processingTime}ms`
+      );
+
+      // Create enhanced notification for prescription processing completion
+      try {
+        if (prescription.status === "processed") {
+          await this.createPrescriptionProcessedNotification(prescription);
+        } else if (prescription.status === "pending_review") {
+          await this.createPrescriptionReviewNotification(prescription);
+        }
+      } catch (notificationError) {
+        console.error(
+          "Error creating processing notification:",
+          notificationError
+        );
+      }
+
       return {
-        prescriptionId,
         success: true,
+        prescription,
         ocrResult,
-        validationResult: prescription.validationResults,
         processingTime,
       };
     } catch (error) {
+      console.error(`processPrescription failed for ${prescriptionId}:`, error);
+
+      // Update prescription status to failed
       try {
         await Prescription.findByIdAndUpdate(prescriptionId, {
           status: "processing_failed",
           "ocrData.processingStatus": "failed",
           "ocrData.processingError": error.message,
+          "validationResults.isValid": false,
+          "validationResults.reviewRequired": true,
         });
       } catch (updateError) {
-        console.error(
-          "Failed to update prescription error status:",
-          updateError
-        );
+        console.error("Failed to update prescription status:", updateError);
       }
 
-      const err = new Error(error.message || "Failed to process prescription");
-      err.statusCode = error.statusCode || 500;
-      throw err;
+      const processingTime = Date.now() - startTime;
+      return {
+        success: false,
+        error: error.message,
+        processingTime,
+      };
+    }
+  }
+
+  /**
+   * Generate enhanced validation results based on OCR output
+   */
+  generateEnhancedValidationResults(ocrResult) {
+    const flags = [];
+    let reviewRequired = false;
+    let isValid = true;
+
+    // Analyze OCR confidence and quality
+    if (ocrResult.confidence < 0.5) {
+      flags.push({
+        type: "low_confidence",
+        severity: "high",
+        message: "Very low OCR confidence. Manual review strongly recommended.",
+        confidence: 1,
+        details: `OCR confidence: ${(ocrResult.confidence * 100).toFixed(1)}%`,
+      });
+      reviewRequired = true;
+      isValid = false;
+    } else if (ocrResult.confidence < 0.7) {
+      flags.push({
+        type: "medium_confidence",
+        severity: "medium",
+        message: "Medium OCR confidence. Review recommended.",
+        confidence: 0.8,
+        details: `OCR confidence: ${(ocrResult.confidence * 100).toFixed(1)}%`,
+      });
+    }
+
+    // Analyze text type and processing approach
+    if (ocrResult.metadata?.textType === "handwritten") {
+      flags.push({
+        type: "handwritten_text",
+        severity: "medium",
+        message:
+          "Handwritten prescription detected. Additional verification recommended.",
+        confidence: 0.7,
+      });
+    }
+
+    // Check for OCR warnings
+    if (ocrResult.warnings && ocrResult.warnings.length > 0) {
+      ocrResult.warnings.forEach((warning) => {
+        flags.push({
+          type: "ocr_warning",
+          severity: warning.includes("Very low") ? "high" : "medium",
+          message: warning,
+          confidence: 0.6,
+        });
+        if (
+          warning.includes("Very low") ||
+          warning.includes("strongly recommended")
+        ) {
+          reviewRequired = true;
+        }
+      });
+    }
+
+    // Analyze medication completeness
+    const incompleteMedications = ocrResult.medications.filter(
+      (med) => med.dosage === "as prescribed" || med.frequency === "as directed"
+    );
+
+    if (incompleteMedications.length > 0) {
+      flags.push({
+        type: "incomplete_medication_info",
+        severity: "medium",
+        message: `${incompleteMedications.length} medication(s) have incomplete dosage or frequency information.`,
+        confidence: 0.8,
+      });
+    }
+
+    // Check for very low medication confidence
+    const lowConfidenceMeds = ocrResult.medications.filter(
+      (med) => med.confidence < 0.4
+    );
+    if (lowConfidenceMeds.length > 0) {
+      flags.push({
+        type: "low_medication_confidence",
+        severity: "high",
+        message: `${lowConfidenceMeds.length} medication(s) have very low confidence scores.`,
+        confidence: 0.9,
+      });
+      reviewRequired = true;
+    }
+
+    return {
+      isValid,
+      flags,
+      aiConfidence: ocrResult.confidence,
+      reviewRequired,
+      validatedAt: new Date(),
+      ocrMetadata: ocrResult.metadata,
+      processingApproach: ocrResult.metadata?.ocrApproach || "standard",
+    };
+  }
+
+  /**
+   * Enhance medication data with additional processing
+   */
+  enhanceMedicationData(medications, metadata) {
+    return medications.map((medication) => {
+      let enhancedMedication = { ...medication };
+
+      // Boost confidence for well-structured medications
+      if (medication.name && medication.dosage && medication.frequency) {
+        if (
+          medication.dosage !== "as prescribed" &&
+          medication.frequency !== "as directed"
+        ) {
+          enhancedMedication.confidence = Math.min(
+            medication.confidence + 0.1,
+            1.0
+          );
+        }
+      }
+
+      // Add metadata tags
+      enhancedMedication.processingTags = [];
+
+      if (metadata?.textType === "handwritten") {
+        enhancedMedication.processingTags.push("handwritten-source");
+      }
+
+      if (medication.confidence < 0.5) {
+        enhancedMedication.processingTags.push("requires-verification");
+      }
+
+      if (enhancedMedication.processingTags.length === 0) {
+        enhancedMedication.processingTags.push("standard-processing");
+      }
+
+      return enhancedMedication;
+    });
+  }
+
+  /**
+   * Create notification when prescription requires review
+   */
+  async createPrescriptionReviewNotification(prescription) {
+    try {
+      console.log("📋 Creating prescription review notification...");
+
+      const notification = new AdvancedNotification({
+        title: "Prescription Requires Review 🔍",
+        message: `Your prescription has been processed but requires manual review due to low confidence or handwritten text. Our team will review it shortly.`,
+        type: "prescription_review",
+        priority: "medium",
+        recipients: [
+          {
+            userId: prescription.patientId,
+            userRole: "patient",
+            deliveryStatus: "pending",
+          },
+        ],
+        referenceData: {
+          referenceId: prescription._id,
+          referenceType: "prescription",
+          metadata: {
+            prescriptionId: prescription._id,
+            status: "pending_review",
+            confidence: prescription.ocrData?.confidence || 0,
+            textType: prescription.ocrData?.metadata?.textType || "unknown",
+          },
+        },
+        channels: {
+          inApp: { enabled: true },
+          email: { enabled: true },
+        },
+        content: {
+          actionButton: {
+            text: "View Details",
+            action: "navigate",
+            url: `/prescriptions/${prescription._id}`,
+          },
+          tags: ["prescription", "review_required", "patient"],
+        },
+        createdBy: {
+          isSystem: true,
+        },
+      });
+
+      await notification.save();
+      console.log("✅ Created prescription review notification");
+    } catch (error) {
+      console.error(
+        "❌ Error creating prescription review notification:",
+        error
+      );
     }
   }
 
@@ -843,6 +1697,9 @@ class PrescriptionController {
         throw error;
       }
 
+      // Store old status for notifications
+      const oldStatus = prescription.status;
+
       // Validate status transition
       this.validateStatusTransition(prescription.status, status);
 
@@ -859,6 +1716,20 @@ class PrescriptionController {
 
       // Commit transaction
       await session.commitTransaction();
+
+      // Create notification for status update (after successful commit)
+      try {
+        if (oldStatus !== status) {
+          await this.createStatusUpdateNotification(
+            prescription,
+            status,
+            oldStatus
+          );
+        }
+      } catch (notificationError) {
+        console.error("[UPDATE_STATUS] Notification error:", notificationError);
+        // Don't throw - status update should succeed even if notifications fail
+      }
 
       return {
         success: true,

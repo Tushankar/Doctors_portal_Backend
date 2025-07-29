@@ -155,21 +155,22 @@ OrderSchema.index({ orderNumber: 1 });
 // Pre-save middleware to generate order number
 OrderSchema.pre("save", async function (next) {
   if (this.isNew && !this.orderNumber) {
-    const count = await this.constructor.countDocuments();
-    this.orderNumber = `ORD${Date.now()}${String(count + 1).padStart(4, "0")}`;
-  }
-  next();
-});
+    let orderNumber;
+    let exists = true;
+    let attempts = 0;
 
-// Pre-save middleware to add status history
-OrderSchema.pre("save", function (next) {
-  if (this.isModified("status") && !this.isNew) {
-    this.statusHistory.push({
-      status: this.status,
-      timestamp: new Date(),
-      updatedBy: this.lastUpdatedBy || this.pharmacyId, // Should be set by the controller
-      notes: this.lastStatusNote || "",
-    });
+    while (exists && attempts < 5) {
+      const count = await this.constructor.countDocuments();
+      orderNumber = `ORD${Date.now()}${String(count + 1).padStart(4, "0")}`;
+      exists = await this.constructor.exists({ orderNumber });
+      attempts++;
+    }
+
+    if (exists) {
+      return next(new Error("Failed to generate unique order number"));
+    }
+
+    this.orderNumber = orderNumber;
   }
   next();
 });

@@ -25,13 +25,41 @@ const patientSchema = new mongoose.Schema({
     required: true,
   },
   address: {
-    street: String,
-    city: String,
-    state: String,
-    zipCode: String,
+    street: {
+      type: String,
+      required: [true, "Please provide street address"],
+    },
+    city: {
+      type: String,
+      required: [true, "Please provide city"],
+    },
+    state: {
+      type: String,
+      required: [true, "Please provide state"],
+    },
+    zipCode: {
+      type: String,
+      required: [true, "Please provide ZIP code"],
+    },
     location: {
       type: { type: String, enum: ["Point"], default: "Point" },
-      coordinates: { type: [Number], default: [0, 0] },
+      coordinates: {
+        type: [Number],
+        required: [true, "Please provide location coordinates"],
+        validate: {
+          validator: function (coords) {
+            return (
+              coords &&
+              coords.length === 2 &&
+              coords[0] >= -180 &&
+              coords[0] <= 180 &&
+              coords[1] >= -90 &&
+              coords[1] <= 90
+            );
+          },
+          message: "Invalid coordinates provided",
+        },
+      },
     },
     country: {
       type: String,

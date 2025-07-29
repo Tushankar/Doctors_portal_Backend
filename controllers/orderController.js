@@ -3,6 +3,11 @@ import { Order } from "../models/Order.js";
 import { Prescription } from "../models/Prescription.js";
 import Pharmacy from "../models/Pharmacy.js";
 import Patient from "../models/Patient.js";
+import ApiError from "../utils/ApiError.js";
+import {
+  createOrderStatusNotification,
+  createNewOrderNotification,
+} from "./advancedNotificationController.js";
 
 class OrderController {
   constructor() {
@@ -14,6 +19,7 @@ class OrderController {
     this.updateOrderItems = this.updateOrderItems.bind(this);
     this.cancelOrder = this.cancelOrder.bind(this);
     this.getOrderHistory = this.getOrderHistory.bind(this);
+    this.getOrderByPrescriptionId = this.getOrderByPrescriptionId.bind(this);
   }
 
   /**
@@ -132,6 +138,13 @@ class OrderController {
         { path: "prescriptionId", select: "description ocrData.medications" },
       ]);
 
+      // Create notification for pharmacy about new order
+      try {
+        await createNewOrderNotification(order);
+      } catch (notificationError) {
+        // Don't fail order creation if notification fails
+      }
+
       return {
         success: true,
         message: "Order created successfully",
@@ -230,6 +243,7 @@ class OrderController {
             .limit(limit),
           Order.countDocuments(query),
         ]);
+        console.log(orders, totalCount);
 
         console.log(
           `[GET_PHARMACY_ORDERS] Found ${orders.length} orders out of ${totalCount} total`
@@ -413,7 +427,16 @@ class OrderController {
       await order.populate([
         { path: "patientId", select: "firstName lastName email phone" },
         { path: "prescriptionId", select: "description" },
+        { path: "pharmacyId", select: "pharmacyName" },
       ]);
+
+      // Send email notification to patient about status update
+      try {
+        await createOrderStatusNotification(order, newStatus, notes);
+      } catch (notificationError) {
+        console.error("Failed to send notification:", notificationError);
+        // Don't fail the order update if notification creation fails
+      }
 
       return {
         success: true,
@@ -608,6 +631,69 @@ class OrderController {
     return timeline.sort(
       (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
     );
+  }
+
+  /**
+   * Get order by prescription ID
+   */
+  async getOrderByPrescriptionId(prescriptionId, userId, userRole) {
+    console.log("=== GET ORDER BY PRESCRIPTION CONTROLLER ===");
+    console.log("Parameters:", { prescriptionId, userId, userRole });
+
+    try {
+      // Find the order by prescription ID
+      const order = await Order.findOne({ prescriptionId })
+        .populate("prescriptionId", "description status createdAt uploadedAt")
+        .populate("patientId", "firstName lastName email phoneNumber")
+        .populate("pharmacyId", "profile address contactInfo")
+        .lean();
+
+      if (!order) {
+        console.log("No order found for prescription:", prescriptionId);
+        throw new Error("Order not found for this prescription");
+      }
+
+      console.log("Order found:", {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        prescriptionId: order.prescriptionId._id,
+        patientId: order.patientId._id,
+        pharmacyId: order.pharmacyId._id,
+        status: order.status,
+      });
+
+      // Check if user has access to this order
+      if (userRole === "patient") {
+        if (order.patientId._id.toString() !== userId.toString()) {
+          console.log("Access denied - patient ID mismatch:", {
+            orderPatientId: order.patientId._id.toString(),
+            requestUserId: userId.toString(),
+          });
+          throw new Error("Access denied - not your order");
+        }
+      } else if (userRole === "pharmacy") {
+        if (order.pharmacyId._id.toString() !== userId.toString()) {
+          console.log("Access denied - pharmacy ID mismatch:", {
+            orderPharmacyId: order.pharmacyId._id.toString(),
+            requestUserId: userId.toString(),
+          });
+          throw new Error("Access denied - not your order");
+        }
+      } else {
+        console.log("Invalid user role:", userRole);
+        throw new Error("Invalid user role");
+      }
+
+      console.log("Access check passed");
+
+      return {
+        success: true,
+        data: order,
+      };
+    } catch (error) {
+      console.error("Error in getOrderByPrescriptionId:", error);
+      throw error;
+    }
   }
 }
 

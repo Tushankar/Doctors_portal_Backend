@@ -11,14 +11,15 @@ import authRoutes from "./routes/authRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import prescriptionRoutes from "./routes/prescriptionRoutes.js";
 import patientRoutes from "./routes/patientRoutes.js";
-
-// Load env vars
-dotenv.config();
-
 import pharmacyRoutes from "./routes/pharmacyRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
+import advancedNotificationRoutes from "./routes/advancedNotificationRoutes.js";
+
+// Load env vars
+dotenv.config();
+
 // Connect to database
 connectDB();
 
@@ -43,8 +44,8 @@ app.use(
 );
 
 // Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/admin", adminRoutes);
+app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/admin", adminRoutes);
 // Prescription routes
 app.use("/api/v1/prescriptions", prescriptionRoutes);
 // Pharmacy routes
@@ -55,6 +56,8 @@ app.use("/api/v1/pharmacies", inventoryRoutes);
 app.use("/api/v1/chat", chatRoutes);
 // Order routes for order management
 app.use("/api/v1/orders", orderRoutes);
+// Advanced notification routes (unified notification system)
+app.use("/api/v1/notifications", advancedNotificationRoutes);
 // Patient routes
 app.use("/api/v1/patients", patientRoutes);
 

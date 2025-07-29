@@ -140,10 +140,26 @@ router.post(
   checkRole(["pharmacy"]),
   async (req, res, next) => {
     try {
-      const { action } = req.body;
+      const { action, pharmacyId } = req.body;
+
+      // If pharmacyId is not provided in body, try to get it from user's pharmacy data
+      let finalPharmacyId = pharmacyId;
+      if (!finalPharmacyId) {
+        // Get pharmacy by user ID
+        const pharmacy = await getPharmacyByUserId(req.user.id);
+        if (pharmacy.success && pharmacy.data) {
+          finalPharmacyId = pharmacy.data._id;
+        } else {
+          return res.status(400).json({
+            success: false,
+            message: "Pharmacy ID required or pharmacy not found for user",
+          });
+        }
+      }
+
       const result = await respondToPrescription(
         req.params.prescriptionId,
-        req.user.id,
+        finalPharmacyId,
         action
       );
       res.json(result);

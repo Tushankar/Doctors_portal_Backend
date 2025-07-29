@@ -51,12 +51,202 @@ export const register = async (req, res, next) => {
     // Create user based on role
     switch (role) {
       case "patient":
-        user = await Patient.create({
-          email,
-          password,
-          role,
-          ...profileData,
-        });
+        // Debug: log entire request body to inspect form fields
+        console.log("[DEBUG] Patient register payload req.body:", req.body);
+        console.log("[DEBUG] profileData before processing:", profileData);
+
+        // Reconstruct nested address location fields from form-data if necessary
+        if (
+          !profileData.address?.location &&
+          req.body["profileData[address][location][coordinates]"]
+        ) {
+          let parsedCoords;
+          try {
+            const coordString =
+              req.body["profileData[address][location][coordinates]"];
+            console.log("[DEBUG] Raw coordinate string:", coordString);
+
+            // Handle the case where coordinates might be double-encoded
+            if (typeof coordString === "string") {
+              // First, try to parse as JSON
+              parsedCoords = JSON.parse(coordString);
+
+              // If the result is still a string, parse it again
+              if (typeof parsedCoords === "string") {
+                parsedCoords = JSON.parse(parsedCoords);
+              }
+
+              // If it's an array with string elements, convert to numbers
+              if (Array.isArray(parsedCoords)) {
+                parsedCoords = parsedCoords.map((coord) => {
+                  if (typeof coord === "string") {
+                    return parseFloat(coord);
+                  }
+                  return coord;
+                });
+              }
+            }
+
+            console.log(
+              "[DEBUG] Parsed coordinates after processing:",
+              parsedCoords
+            );
+          } catch (e) {
+            console.error("[DEBUG] Error parsing coordinates:", e);
+            parsedCoords = null;
+          }
+
+          if (!profileData.address) {
+            profileData.address = {};
+          }
+
+          profileData.address.location = {
+            type: "Point",
+            coordinates: parsedCoords,
+          };
+        }
+
+        // Parse location coordinates if sent as JSON string
+        let patientCoordinates = profileData.address?.location?.coordinates;
+        if (typeof patientCoordinates === "string") {
+          try {
+            patientCoordinates = JSON.parse(patientCoordinates);
+
+            // If still a string after first parse, try again
+            if (typeof patientCoordinates === "string") {
+              patientCoordinates = JSON.parse(patientCoordinates);
+            }
+          } catch (e) {
+            console.error("[DEBUG] Error parsing coordinate string:", e);
+            patientCoordinates = null;
+          }
+        }
+
+        // Ensure coordinates are numbers
+        if (Array.isArray(patientCoordinates)) {
+          patientCoordinates = patientCoordinates.map((coord) => {
+            if (typeof coord === "string") {
+              const num = parseFloat(coord);
+              return isNaN(num) ? null : num;
+            }
+            return coord;
+          });
+
+          // Check if any coordinate conversion failed
+          if (patientCoordinates.includes(null)) {
+            patientCoordinates = null;
+          }
+        }
+
+        // Debug: log parsed coordinates for validation
+        console.log(
+          "[DEBUG] Patient registration - final coordinates:",
+          patientCoordinates,
+          "Type:",
+          typeof patientCoordinates,
+          "Array check:",
+          Array.isArray(patientCoordinates)
+        );
+
+        // Validate location data
+        if (!profileData.address?.location) {
+          return res.status(400).json({
+            success: false,
+            message: "Please provide location information",
+            field: "address.location",
+          });
+        }
+
+        if (!Array.isArray(patientCoordinates)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Invalid coordinate format. Please select location on map.",
+            field: "address.location.coordinates",
+          });
+        }
+
+        if (patientCoordinates.length !== 2) {
+          return res.status(400).json({
+            success: false,
+            message: "Coordinates must contain longitude and latitude",
+            field: "address.location.coordinates",
+          });
+        }
+
+        if (
+          typeof patientCoordinates[0] !== "number" ||
+          typeof patientCoordinates[1] !== "number"
+        ) {
+          return res.status(400).json({
+            success: false,
+            message: "Coordinate values must be numbers",
+            field: "address.location.coordinates",
+          });
+        }
+
+        if (patientCoordinates[0] < -180 || patientCoordinates[0] > 180) {
+          return res.status(400).json({
+            success: false,
+            message: "Longitude must be between -180 and 180",
+            field: "address.location.coordinates",
+          });
+        }
+
+        if (patientCoordinates[1] < -90 || patientCoordinates[1] > 90) {
+          return res.status(400).json({
+            success: false,
+            message: "Latitude must be between -90 and 90",
+            field: "address.location.coordinates",
+          });
+        }
+
+        // Update coordinates with parsed values
+        profileData.address.location.coordinates = patientCoordinates;
+
+        // Validate required address fields
+        const requiredAddressFields = ["street", "city", "state", "zipCode"];
+        for (const field of requiredAddressFields) {
+          if (!profileData.address[field]) {
+            return res.status(400).json({
+              success: false,
+              message: `Please provide address ${field}`,
+              field: `address.${field}`,
+            });
+          }
+        }
+
+        try {
+          user = await Patient.create({
+            email,
+            password,
+            role,
+            ...profileData,
+          });
+        } catch (validationError) {
+          console.error("Patient validation error:", validationError);
+
+          // Handle mongoose validation errors
+          if (validationError.name === "ValidationError") {
+            const errors = Object.values(validationError.errors);
+            const firstError = errors[0];
+            return res.status(400).json({
+              success: false,
+              message: firstError.message,
+              field: firstError.path,
+              errors: errors.map((err) => ({
+                field: err.path,
+                message: err.message,
+              })),
+            });
+          }
+
+          // Handle other types of errors
+          return res.status(400).json({
+            success: false,
+            message: validationError.message || "Patient registration failed",
+          });
+        }
 
         // Generate OTP for email verification
         const patientOtp = generateOTP();
@@ -599,6 +789,7 @@ export const logout = async (req, res, next) => {
 // Get Current User
 export const getMe = async (req, res, next) => {
   try {
+    console.log(req.user);
     let user;
 
     switch (req.user.role) {
@@ -615,7 +806,7 @@ export const getMe = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      user,
+      data: user,
     });
   } catch (error) {
     next(error);

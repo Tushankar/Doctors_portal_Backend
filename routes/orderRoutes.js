@@ -209,4 +209,33 @@ router.get(
   }
 );
 
+/**
+ * @route   GET /api/v1/orders/by-prescription/:prescriptionId
+ * @desc    Get order by prescription ID
+ * @access  Private (Patient or Pharmacy)
+ */
+router.get(
+  "/by-prescription/:prescriptionId",
+  protect,
+  async (req, res, next) => {
+    try {
+      console.log("=== GET ORDER BY PRESCRIPTION ROUTE ===");
+      console.log("Prescription ID:", req.params.prescriptionId);
+      console.log("User:", { id: req.user.id, role: req.user.role });
+
+      const result = await orderController.getOrderByPrescriptionId(
+        req.params.prescriptionId,
+        req.user.id,
+        req.user.role
+      );
+
+      console.log("Order found:", result);
+      res.json(result);
+    } catch (error) {
+      console.error("Error in get order by prescription route:", error);
+      next(error);
+    }
+  }
+);
+
 export default router;

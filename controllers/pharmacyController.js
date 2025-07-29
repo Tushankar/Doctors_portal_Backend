@@ -5,6 +5,11 @@ import User from "../models/User.js";
 import { fileUploadService } from "./fileUploadController.js";
 import { Prescription } from "../models/Prescription.js";
 import ApiError from "../utils/ApiError.js";
+import {
+  createPrescriptionApprovalNotification,
+  createPrescriptionDeclineNotification,
+} from "./advancedNotificationController.js";
+import AdvancedNotification from "../models/AdvancedNotification.js";
 
 // Export controller methods directly
 // export const registerPharmacy = async (userId, pharmacyData, documents) => {
@@ -429,17 +434,71 @@ export const respondToPrescription = async (
   action
 ) => {
   try {
-    const prescription = await Prescription.findById(prescriptionId);
+    // Find prescription with patient data populated
+    const prescription = await Prescription.findById(prescriptionId)
+      .populate("patientId", "firstName lastName email profile")
+      .populate("doctorId", "firstName lastName profile");
+
     if (!prescription) throw new ApiError("Prescription not found", 404);
+
+    // Get pharmacy data
+    const pharmacy = await Pharmacy.findById(pharmacyId).populate(
+      "userId",
+      "firstName lastName email"
+    );
+
+    if (!pharmacy) throw new ApiError("Pharmacy not found", 404);
+
     if (action === "accept") {
       prescription.status = "accepted";
       prescription.pharmacyId = pharmacyId;
+      prescription.acceptedAt = new Date();
+      prescription.acceptedBy = pharmacy.userId._id;
+
+      await prescription.save();
+
+      // Create notification for patient when prescription is approved
+      try {
+        await createPrescriptionApprovalNotification(
+          prescription.patientId._id,
+          prescriptionId,
+          pharmacyId
+        );
+        console.log("✅ Prescription approval notification sent to patient");
+      } catch (notificationError) {
+        console.error(
+          "❌ Failed to send prescription approval notification:",
+          notificationError
+        );
+        // Don't throw error - prescription approval should still succeed
+      }
     } else if (action === "decline") {
       prescription.status = "cancelled";
+      prescription.cancelledAt = new Date();
+      prescription.cancelledBy = pharmacy.userId._id;
+
+      await prescription.save();
+
+      // Create notification for patient when prescription is declined
+      try {
+        await createPrescriptionDeclineNotification(
+          prescription.patientId._id,
+          prescriptionId,
+          pharmacyId,
+          prescription.cancellationReason || ""
+        );
+        console.log("✅ Prescription decline notification sent to patient");
+      } catch (notificationError) {
+        console.error(
+          "❌ Failed to send prescription decline notification:",
+          notificationError
+        );
+        // Don't throw error - prescription decline should still succeed
+      }
     } else {
       throw new ApiError("Invalid action", 400);
     }
-    await prescription.save();
+
     return { success: true, message: `Prescription ${action}ed successfully` };
   } catch (err) {
     throw err instanceof ApiError ? err : new ApiError(err.message, 500);
@@ -636,6 +695,9 @@ export const getPatientHealthRecords = async (req, res, next) => {
     const { patientId } = req.params;
     const pharmacyId = req.user.pharmacyId;
 
+    console.log("[INFO] Fetching health records for Patient ID:", patientId);
+    console.log("[INFO] Requesting Pharmacy ID:", pharmacyId);
+
     // Import Patient model here to avoid circular dependency
     const Patient = (await import("../models/Patient.js")).default;
 
@@ -644,10 +706,15 @@ export const getPatientHealthRecords = async (req, res, next) => {
     );
 
     if (!patient) {
+      console.log("[ERROR] Patient not found with ID:", patientId);
       throw new ApiError("Patient not found", 404);
     }
 
-    // Filter medical history to only show records shared with this pharmacy
+    console.log("[INFO] Patient found:", {
+      name: `${patient.firstName} ${patient.lastName}`,
+      phone: patient.phone,
+    });
+
     const sharedMedicalHistory = patient.medicalHistory.filter((record) =>
       record.sharedWithPharmacies.some(
         (share) =>
@@ -656,7 +723,11 @@ export const getPatientHealthRecords = async (req, res, next) => {
       )
     );
 
-    // Allergies and current medications are always accessible for safety
+    console.log(
+      "[INFO] Shared Medical History Length:",
+      sharedMedicalHistory.length
+    );
+
     const healthRecords = {
       patientInfo: {
         name: `${patient.firstName} ${patient.lastName}`,
@@ -670,11 +741,14 @@ export const getPatientHealthRecords = async (req, res, next) => {
       vitalSigns: patient.vitalSigns?.slice(-3) || [], // Last 3 vital sign records
     };
 
+    console.log("[SUCCESS] Health records ready to send.");
+
     res.status(200).json({
       success: true,
       data: healthRecords,
     });
   } catch (error) {
+    console.error("[EXCEPTION] getPatientHealthRecords Error:", error);
     next(error);
   }
 };
@@ -824,6 +898,7 @@ export const getSharedHealthRecords = async (req, res, next) => {
     const pharmacyId = pharmacy._id;
 
     const Patient = (await import("../models/Patient.js")).default;
+    const { Order } = await import("../models/Order.js");
 
     // Get patient with health records shared with this pharmacy
     const patient = await Patient.findById(patientId).select(
@@ -845,54 +920,275 @@ export const getSharedHealthRecords = async (req, res, next) => {
       emergencyContacts: patient.emergencyContacts?.length || 0,
     });
 
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Pharmacy ID for filtering: ${pharmacyId}`
+    );
+
+    // Check if there are any orders between this patient and pharmacy (indicating approved relationship)
+    const existingOrders = await Order.find({
+      patientId: patientId,
+      pharmacyId: pharmacyId,
+    }).limit(1);
+
+    const hasOrderRelationship = existingOrders.length > 0;
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Has order relationship: ${hasOrderRelationship}`
+    );
+
+    // If there's an order relationship, auto-share health records
+    if (hasOrderRelationship) {
+      console.log(
+        `[SHARED_HEALTH_RECORDS] Order relationship found, auto-sharing health records`
+      );
+
+      // Auto-share health records with this pharmacy
+      let recordsShared = 0;
+
+      // Share medical history
+      if (patient.medicalHistory && patient.medicalHistory.length > 0) {
+        patient.medicalHistory.forEach((record) => {
+          const existingShare = record.sharedWithPharmacies?.find(
+            (share) => share.pharmacyId.toString() === pharmacyId.toString()
+          );
+
+          if (!existingShare) {
+            if (!record.sharedWithPharmacies) {
+              record.sharedWithPharmacies = [];
+            }
+            record.sharedWithPharmacies.push({
+              pharmacyId: pharmacyId,
+              sharedAt: new Date(),
+              approvalStatus: "approved",
+            });
+            recordsShared++;
+          }
+        });
+      }
+
+      // Share allergies
+      if (patient.allergies && patient.allergies.length > 0) {
+        patient.allergies.forEach((record) => {
+          const existingShare = record.sharedWithPharmacies?.find(
+            (share) => share.pharmacyId.toString() === pharmacyId.toString()
+          );
+
+          if (!existingShare) {
+            if (!record.sharedWithPharmacies) {
+              record.sharedWithPharmacies = [];
+            }
+            record.sharedWithPharmacies.push({
+              pharmacyId: pharmacyId,
+              sharedAt: new Date(),
+              approvalStatus: "approved",
+            });
+            recordsShared++;
+          }
+        });
+      }
+
+      // Share current medications
+      if (patient.currentMedications && patient.currentMedications.length > 0) {
+        patient.currentMedications.forEach((record) => {
+          const existingShare = record.sharedWithPharmacies?.find(
+            (share) => share.pharmacyId.toString() === pharmacyId.toString()
+          );
+
+          if (!existingShare) {
+            if (!record.sharedWithPharmacies) {
+              record.sharedWithPharmacies = [];
+            }
+            record.sharedWithPharmacies.push({
+              pharmacyId: pharmacyId,
+              sharedAt: new Date(),
+              approvalStatus: "approved",
+            });
+            recordsShared++;
+          }
+        });
+      }
+
+      // Share vital signs
+      if (patient.vitalSigns && patient.vitalSigns.length > 0) {
+        patient.vitalSigns.forEach((record) => {
+          const existingShare = record.sharedWithPharmacies?.find(
+            (share) => share.pharmacyId.toString() === pharmacyId.toString()
+          );
+
+          if (!existingShare) {
+            if (!record.sharedWithPharmacies) {
+              record.sharedWithPharmacies = [];
+            }
+            record.sharedWithPharmacies.push({
+              pharmacyId: pharmacyId,
+              sharedAt: new Date(),
+              approvalStatus: "approved",
+            });
+            recordsShared++;
+          }
+        });
+      }
+
+      // Share emergency contacts
+      if (patient.emergencyContacts && patient.emergencyContacts.length > 0) {
+        patient.emergencyContacts.forEach((record) => {
+          const existingShare = record.sharedWithPharmacies?.find(
+            (share) => share.pharmacyId.toString() === pharmacyId.toString()
+          );
+
+          if (!existingShare) {
+            if (!record.sharedWithPharmacies) {
+              record.sharedWithPharmacies = [];
+            }
+            record.sharedWithPharmacies.push({
+              pharmacyId: pharmacyId,
+              sharedAt: new Date(),
+              approvalStatus: "approved",
+            });
+            recordsShared++;
+          }
+        });
+      }
+
+      if (recordsShared > 0) {
+        await patient.save();
+        console.log(
+          `[SHARED_HEALTH_RECORDS] Auto-shared ${recordsShared} health records`
+        );
+      }
+    }
+
     // Filter records that are shared with this pharmacy and approved
     const sharedMedicalHistory = (patient.medicalHistory || []).filter(
-      (record) => {
+      (record, index) => {
+        console.log(`[FILTER] Medical History Record ${index + 1}:`);
+        console.log(
+          `  - Has sharedWithPharmacies: ${!!record.sharedWithPharmacies}`
+        );
+        console.log(
+          `  - Shared count: ${record.sharedWithPharmacies?.length || 0}`
+        );
+
+        if (
+          record.sharedWithPharmacies &&
+          record.sharedWithPharmacies.length > 0
+        ) {
+          record.sharedWithPharmacies.forEach((share, shareIndex) => {
+            console.log(`    Share ${shareIndex + 1}:`);
+            console.log(`      - Pharmacy ID: ${share.pharmacyId}`);
+            console.log(`      - Status: ${share.approvalStatus}`);
+            console.log(
+              `      - Matches our pharmacy: ${
+                share.pharmacyId.toString() === pharmacyId.toString()
+              }`
+            );
+            console.log(
+              `      - Is approved: ${share.approvalStatus === "approved"}`
+            );
+          });
+        }
+
         const share = record.sharedWithPharmacies?.find(
           (share) =>
             share.pharmacyId.toString() === pharmacyId.toString() &&
             share.approvalStatus === "approved"
         );
+        console.log(`  - Record included: ${!!share}`);
         return share;
       }
     );
 
-    const sharedAllergies = (patient.allergies || []).filter((record) => {
-      const share = record.sharedWithPharmacies?.find(
-        (share) =>
-          share.pharmacyId.toString() === pharmacyId.toString() &&
-          share.approvalStatus === "approved"
-      );
-      return share;
-    });
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Filtered medical history count: ${sharedMedicalHistory.length}`
+    );
+
+    const sharedAllergies = (patient.allergies || []).filter(
+      (record, index) => {
+        console.log(`[FILTER] Allergy Record ${index + 1}:`);
+        console.log(
+          `  - Has sharedWithPharmacies: ${!!record.sharedWithPharmacies}`
+        );
+        console.log(
+          `  - Shared count: ${record.sharedWithPharmacies?.length || 0}`
+        );
+
+        const share = record.sharedWithPharmacies?.find(
+          (share) =>
+            share.pharmacyId.toString() === pharmacyId.toString() &&
+            share.approvalStatus === "approved"
+        );
+        console.log(`  - Record included: ${!!share}`);
+        return share;
+      }
+    );
+
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Filtered allergies count: ${sharedAllergies.length}`
+    );
 
     const sharedCurrentMedications = (patient.currentMedications || []).filter(
-      (record) => {
+      (record, index) => {
+        console.log(`[FILTER] Medication Record ${index + 1}:`);
+        console.log(
+          `  - Has sharedWithPharmacies: ${!!record.sharedWithPharmacies}`
+        );
+        console.log(
+          `  - Shared count: ${record.sharedWithPharmacies?.length || 0}`
+        );
+
         const share = record.sharedWithPharmacies?.find(
           (share) =>
             share.pharmacyId.toString() === pharmacyId.toString() &&
             share.approvalStatus === "approved"
         );
+        console.log(`  - Record included: ${!!share}`);
         return share;
       }
     );
 
-    const sharedVitalSigns = (patient.vitalSigns || []).filter((record) => {
-      const share = record.sharedWithPharmacies?.find(
-        (share) =>
-          share.pharmacyId.toString() === pharmacyId.toString() &&
-          share.approvalStatus === "approved"
-      );
-      return share;
-    });
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Filtered medications count: ${sharedCurrentMedications.length}`
+    );
 
-    const sharedEmergencyContacts = (patient.emergencyContacts || []).filter(
-      (record) => {
+    const sharedVitalSigns = (patient.vitalSigns || []).filter(
+      (record, index) => {
+        console.log(`[FILTER] Vital Signs Record ${index + 1}:`);
+        console.log(
+          `  - Has sharedWithPharmacies: ${!!record.sharedWithPharmacies}`
+        );
+        console.log(
+          `  - Shared count: ${record.sharedWithPharmacies?.length || 0}`
+        );
+
         const share = record.sharedWithPharmacies?.find(
           (share) =>
             share.pharmacyId.toString() === pharmacyId.toString() &&
             share.approvalStatus === "approved"
         );
+        console.log(`  - Record included: ${!!share}`);
+        return share;
+      }
+    );
+
+    console.log(
+      `[SHARED_HEALTH_RECORDS] Filtered vital signs count: ${sharedVitalSigns.length}`
+    );
+
+    const sharedEmergencyContacts = (patient.emergencyContacts || []).filter(
+      (record, index) => {
+        console.log(`[FILTER] Emergency Contact Record ${index + 1}:`);
+        console.log(
+          `  - Has sharedWithPharmacies: ${!!record.sharedWithPharmacies}`
+        );
+        console.log(
+          `  - Shared count: ${record.sharedWithPharmacies?.length || 0}`
+        );
+
+        const share = record.sharedWithPharmacies?.find(
+          (share) =>
+            share.pharmacyId.toString() === pharmacyId.toString() &&
+            share.approvalStatus === "approved"
+        );
+        console.log(`  - Record included: ${!!share}`);
         return share;
       }
     );
