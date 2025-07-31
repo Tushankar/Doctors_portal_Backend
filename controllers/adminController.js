@@ -265,12 +265,98 @@ export const getAllPatients = async (req, res, next) => {
   }
 };
 
+// Get individual patient details
+export const getPatientDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    console.log("🔍 getPatientDetails called with ID:", id);
+
+    // Validate ObjectId format
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      console.log("❌ Invalid ObjectId format:", id);
+      return res.status(400).json({
+        success: false,
+        message: "Invalid patient ID format",
+      });
+    }
+
+    // First try to find patient without population
+    console.log("🔍 Searching for patient...");
+    const patient = await Patient.findById(id).select("-password");
+
+    if (!patient) {
+      console.log("❌ Patient not found with ID:", id);
+      return res.status(404).json({
+        success: false,
+        message: "Patient not found",
+      });
+    }
+
+    console.log("✅ Patient found:", patient.firstName, patient.lastName);
+
+    // Try to populate prescription history if it exists, but handle any errors gracefully
+    let populatedPatient = patient;
+    try {
+      console.log("🔍 Attempting to populate patient data...");
+      populatedPatient = await Patient.findById(id)
+        .select("-password")
+        .populate({
+          path: "prescriptionHistory.prescriptionId",
+          select: "description status createdAt uploadedAt ocrData",
+          options: { strictPopulate: false },
+        })
+        .populate({
+          path: "prescriptionHistory.fulfilledBy",
+          select: "pharmacyName address phone email",
+          options: { strictPopulate: false },
+        });
+      console.log("✅ Population successful");
+    } catch (populateError) {
+      console.log("⚠️ Population error (non-critical):", populateError.message);
+      // Use the non-populated patient data if population fails
+    }
+
+    console.log("✅ Returning patient details");
+    res.status(200).json({
+      success: true,
+      data: populatedPatient || patient,
+    });
+  } catch (error) {
+    console.error("❌ Error in getPatientDetails:", error);
+    next(error);
+  }
+};
+
 // Toggle user active status
 export const toggleUserStatus = async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.id);
+    const { id } = req.params;
+    console.log("🔍 toggleUserStatus called with ID:", id);
+
+    // First try to find as a User (this works for patients and direct user accounts)
+    let user = await User.findById(id);
+    let entityType = "user";
+    let entityName = "";
 
     if (!user) {
+      console.log("🔍 Not found in User collection, checking Pharmacy...");
+      // If not found in User, try to find as a Pharmacy and get the associated user
+      const pharmacy = await Pharmacy.findById(id);
+      if (pharmacy) {
+        user = await User.findById(pharmacy.userId);
+        entityType = "pharmacy";
+        entityName = pharmacy.pharmacyName;
+        console.log(
+          "✅ Found pharmacy:",
+          entityName,
+          "with user ID:",
+          pharmacy.userId
+        );
+      }
+    }
+
+    if (!user) {
+      console.log("❌ User not found for ID:", id);
       return res.status(404).json({
         success: false,
         message: "User not found",
@@ -285,21 +371,35 @@ export const toggleUserStatus = async (req, res, next) => {
       });
     }
 
+    const wasActive = user.isActive;
     user.isActive = !user.isActive;
     await user.save();
 
+    // Also update the pharmacy's isActive status if this is a pharmacy
+    if (entityType === "pharmacy") {
+      await Pharmacy.findByIdAndUpdate(id, { isActive: user.isActive });
+      console.log("✅ Updated pharmacy isActive status");
+    }
+
+    const statusMessage = `${entityType === "pharmacy" ? "Pharmacy" : "User"} ${
+      user.isActive ? "activated" : "deactivated"
+    } successfully`;
+
+    console.log("✅", statusMessage);
+
     res.status(200).json({
       success: true,
-      message: `User ${
-        user.isActive ? "activated" : "deactivated"
-      } successfully`,
+      message: statusMessage,
       data: {
-        id: user._id,
+        id: entityType === "pharmacy" ? id : user._id,
         email: user.email,
         isActive: user.isActive,
+        entityType,
+        entityName,
       },
     });
   } catch (error) {
+    console.error("❌ Error in toggleUserStatus:", error);
     next(error);
   }
 };

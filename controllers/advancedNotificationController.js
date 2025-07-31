@@ -507,7 +507,7 @@ async function addRoleBasedRecipients(notification) {
   }
 }
 
-async function processNotificationDelivery(notification) {
+export async function processNotificationDelivery(notification) {
   try {
     // Process different delivery channels
     if (notification.channels.email?.enabled) {

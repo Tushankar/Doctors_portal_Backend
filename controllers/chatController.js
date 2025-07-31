@@ -157,13 +157,74 @@ export const sendMessage = async (threadId, sender, content) => {
 
 // Fetch all chat threads for a user
 export const getChatThreads = async (userId) => {
-  // find threads involving the user
+  console.log("=== GET CHAT THREADS ===");
+  console.log("User ID:", userId);
+
+  // Find threads involving the user and populate participant details
   const threads = await ChatThread.find({ participants: userId })
-    .populate("participants", "profile.name role")
+    .populate({
+      path: "participants",
+      select: "role email firstName lastName", // For Patient model
+    })
     .populate("prescriptionId", "status description createdAt")
     .populate("orderId", "orderNumber status totalAmount createdAt")
     .lean();
-  return { success: true, data: threads };
+
+  console.log("Found threads:", threads.length);
+
+  // Enhance threads with participant information from Pharmacy model if needed
+  const enhancedThreads = await Promise.all(
+    threads.map(async (thread) => {
+      const enhancedParticipants = await Promise.all(
+        thread.participants.map(async (participant) => {
+          let participantInfo = { ...participant };
+
+          if (participant.role === "pharmacy") {
+            // Fetch pharmacy details separately
+            const Pharmacy = (await import("../models/Pharmacy.js")).default;
+            const pharmacyDetails = await Pharmacy.findOne({
+              userId: participant._id,
+            })
+              .select("pharmacyName")
+              .lean();
+
+            if (pharmacyDetails) {
+              participantInfo.pharmacyName = pharmacyDetails.pharmacyName;
+              participantInfo.name = pharmacyDetails.pharmacyName;
+            }
+          } else if (participant.role === "patient") {
+            // For patients, combine firstName and lastName
+            if (participant.firstName && participant.lastName) {
+              participantInfo.name = `${participant.firstName} ${participant.lastName}`;
+            }
+          }
+
+          return participantInfo;
+        })
+      );
+
+      return {
+        ...thread,
+        participants: enhancedParticipants,
+      };
+    })
+  );
+
+  console.log(
+    "Enhanced threads with participant names:",
+    enhancedThreads.map((t) => ({
+      id: t._id,
+      participants: t.participants.map((p) => ({
+        role: p.role,
+        name: p.name,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        pharmacyName: p.pharmacyName,
+      })),
+    }))
+  );
+
+  return { success: true, data: enhancedThreads };
 };
 
 // DEBUG: Fetch all chat threads for a specific order ID

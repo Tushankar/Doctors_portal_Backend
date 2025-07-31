@@ -7,6 +7,7 @@ import {
   rejectPharmacy,
   getAllPharmacies,
   getAllPatients,
+  getPatientDetails,
   toggleUserStatus,
   getDashboardStats,
   createAdmin,
@@ -37,6 +38,7 @@ router.post("/fix-pharmacy-approval-status", fixPharmacyApprovalStatus);
 // User management
 router.get("/pharmacies", getAllPharmacies);
 router.get("/patients", getAllPatients);
+router.get("/patients/:id", getPatientDetails);
 router.put("/users/:id/toggle-status", toggleUserStatus);
 
 // Admin management (super admin only)
