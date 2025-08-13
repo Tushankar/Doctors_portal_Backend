@@ -16,6 +16,8 @@ import inventoryRoutes from "./routes/inventoryRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import advancedNotificationRoutes from "./routes/advancedNotificationRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
+import refillRoutes from "./routes/refillRoutes.js";
 
 // Load env vars
 dotenv.config();
@@ -35,10 +37,18 @@ app.use(cookieParser());
 // Enable CORS
 app.use(
   cors({
-    origin:
-      process.env.NODE_ENV === "production"
-        ? process.env.FRONTEND_URL
-        : "http://localhost:5173",
+    origin: function (origin, callback) {
+      if (process.env.NODE_ENV === "production") {
+        callback(null, process.env.FRONTEND_URL === origin);
+      } else {
+        // Allow localhost on any port for development
+        if (!origin || /^http:\/\/localhost:\d+$/.test(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      }
+    },
     credentials: true,
   })
 );
@@ -60,6 +70,10 @@ app.use("/api/v1/orders", orderRoutes);
 app.use("/api/v1/notifications", advancedNotificationRoutes);
 // Patient routes
 app.use("/api/v1/patients", patientRoutes);
+// Contact routes for contact form and info
+app.use("/api/v1/contact", contactRoutes);
+// Refill routes for prescription refill requests
+app.use("/api/v1/refills", refillRoutes);
 
 // Test route
 app.get("/", (req, res) => {

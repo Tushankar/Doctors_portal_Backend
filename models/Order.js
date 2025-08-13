@@ -44,7 +44,8 @@ const OrderSchema = new Schema(
         "preparing", // Pharmacy is preparing medications
         "ready", // Order ready for pickup/delivery
         "out_for_delivery", // For delivery orders
-        "delivered", // Order completed
+        "delivered", // Order delivered
+        "completed", // Order completed and confirmed by patient
         "cancelled", // Order cancelled
         "on_hold", // Order on hold for some reason
       ],
@@ -111,6 +112,7 @@ const OrderSchema = new Schema(
             "ready",
             "out_for_delivery",
             "delivered",
+            "completed",
             "cancelled",
             "on_hold",
           ],
@@ -138,6 +140,7 @@ const OrderSchema = new Schema(
     preparedAt: Date,
     readyAt: Date,
     deliveredAt: Date,
+    completedAt: Date,
     cancelledAt: Date,
   },
   {

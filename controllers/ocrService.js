@@ -1355,12 +1355,21 @@ class OCRService {
   async downloadImage(url) {
     try {
       console.log(`Downloading image from: ${url}`);
-      const response = await axios.get(url, {
+      
+      // For Cloudinary URLs, modify to use public access
+      let downloadUrl = url;
+      if (url.includes('cloudinary.com') && url.includes('/raw/upload/')) {
+        // Convert raw upload URL to image URL for public access
+        downloadUrl = url.replace('/raw/upload/', '/image/upload/');
+        console.log(`Modified Cloudinary URL: ${downloadUrl}`);
+      }
+      
+      const response = await axios.get(downloadUrl, {
         responseType: "arraybuffer",
         timeout: 30000, // 30 second timeout
         headers: {
           "User-Agent": "Prescription-OCR-Service/1.0",
-          Accept: "image/*",
+          Accept: "image/*,application/pdf",
         },
         maxContentLength: 50 * 1024 * 1024, // 50MB max
       });

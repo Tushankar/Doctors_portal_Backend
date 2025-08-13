@@ -271,6 +271,13 @@ const AdvancedNotificationSchema = new Schema(
       index: true,
     },
 
+    // Global read status (for admin view)
+    read: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
     // Creator information
     createdBy: {
       userId: {

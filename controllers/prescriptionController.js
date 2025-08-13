@@ -567,7 +567,7 @@ class PrescriptionController {
               },
             },
           },
-          "_id pharmacyName"
+          "_id pharmacyName userId"
         );
         console.log(
           `[CREATE_PRESCRIPTION] Found ${nearby.length} nearby pharmacies using geolocation`
@@ -590,14 +590,14 @@ class PrescriptionController {
 
           nearby = await Pharmacy.find(
             cityStateQuery,
-            "_id pharmacyName"
+            "_id pharmacyName userId"
           ).limit(10);
           console.log(
             `[CREATE_PRESCRIPTION] Found ${nearby.length} pharmacies in city/state: ${patientCity}, ${patientState}`
           );
         } else {
           // Last resort: get any approved pharmacies (limit to prevent overwhelming)
-          nearby = await Pharmacy.find({}, "_id pharmacyName").limit(5);
+          nearby = await Pharmacy.find({}, "_id pharmacyName userId").limit(5);
           console.log(
             `[CREATE_PRESCRIPTION] No location data, using ${nearby.length} random pharmacies`
           );

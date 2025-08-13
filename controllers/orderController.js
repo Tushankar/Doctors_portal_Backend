@@ -179,10 +179,11 @@ class OrderController {
         .populate("pharmacyId", "pharmacyName contactInfo address")
         .populate(
           "prescriptionId",
-          "description ocrData createdAt uploadedAt validationResults"
+          "description ocrData createdAt uploadedAt validationResults originalFile"
         )
         .populate("statusHistory.updatedBy", "firstName lastName email");
 
+      console.log(order);
       if (!order) {
         throw new Error("Order not found or unauthorized");
       }
@@ -236,7 +237,7 @@ class OrderController {
             .populate("patientId", "firstName lastName email phone address")
             .populate(
               "prescriptionId",
-              "description ocrData createdAt uploadedAt validationResults"
+              "description ocrData createdAt uploadedAt validationResults originalFile"
             )
             .sort({ createdAt: -1 })
             .skip(skip)
@@ -282,7 +283,7 @@ class OrderController {
           .populate("patientId", "firstName lastName email phone address")
           .populate(
             "prescriptionId",
-            "description ocrData createdAt uploadedAt validationResults"
+            "description ocrData createdAt uploadedAt validationResults originalFile"
           )
           .sort({ createdAt: -1 }) // Most recent first
           .skip(skip)
@@ -334,7 +335,7 @@ class OrderController {
           .populate("pharmacyId", "pharmacyName contactInfo address")
           .populate(
             "prescriptionId",
-            "description ocrData createdAt uploadedAt validationResults"
+            "description ocrData createdAt uploadedAt validationResults originalFile"
           )
           .sort({ createdAt: -1 })
           .skip(skip)
@@ -405,6 +406,9 @@ class OrderController {
         case "delivered":
           order.deliveredAt = now;
           break;
+        case "completed":
+          order.completedAt = now;
+          break;
         case "cancelled":
           order.cancelledAt = now;
           break;
@@ -417,6 +421,12 @@ class OrderController {
         await Prescription.findByIdAndUpdate(
           order.prescriptionId,
           { status: "delivered" },
+          { session }
+        );
+      } else if (newStatus === "completed") {
+        await Prescription.findByIdAndUpdate(
+          order.prescriptionId,
+          { status: "completed" },
           { session }
         );
       }
@@ -590,7 +600,8 @@ class OrderController {
       ready: ["out_for_delivery", "delivered", "cancelled"],
       out_for_delivery: ["delivered", "cancelled"],
       on_hold: ["confirmed", "preparing", "cancelled"],
-      delivered: [], // Final state
+      delivered: ["completed"], // Can transition to completed
+      completed: [], // Final state
       cancelled: [], // Final state
     };
 
@@ -612,7 +623,8 @@ class OrderController {
       preparing: { label: "Preparing Medications", icon: "⚗️" },
       ready: { label: "Ready for Pickup/Delivery", icon: "📦" },
       out_for_delivery: { label: "Out for Delivery", icon: "🚛" },
-      delivered: { label: "Delivered", icon: "🎉" },
+      delivered: { label: "Delivered", icon: "🚚" },
+      completed: { label: "Completed", icon: "🎉" },
       cancelled: { label: "Cancelled", icon: "❌" },
       on_hold: { label: "On Hold", icon: "⏸️" },
     };

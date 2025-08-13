@@ -145,9 +145,20 @@ export const getUserNotifications = async (req, res) => {
         (r) => r.userId.toString() === userId.toString()
       );
 
+      const notificationObj = notification.toObject();
+      
+      // For admin users, use the global read field; for others, use recipient status
+      let readStatus;
+      if (req.user.role === "admin") {
+        readStatus = notification.read || false;
+      } else {
+        readStatus = userRecipient?.deliveryStatus === "read" || false;
+      }
+
       return {
-        ...notification.toObject(),
+        ...notificationObj,
         userStatus: userRecipient || { deliveryStatus: "pending" },
+        read: readStatus,
         recipients: undefined, // Remove other recipients for privacy
       };
     });
@@ -178,6 +189,7 @@ export const markNotificationAsRead = async (req, res) => {
   try {
     const { notificationId } = req.params;
     const userId = req.user._id;
+    const userRole = req.user.role;
 
     const notification = await AdvancedNotification.findById(notificationId);
 
@@ -188,7 +200,15 @@ export const markNotificationAsRead = async (req, res) => {
       });
     }
 
-    await notification.markAsRead(userId);
+    // For admin users, mark the notification as globally read
+    if (userRole === "admin") {
+      notification.read = true;
+      const savedNotification = await notification.save();
+      console.log(`Admin marked notification ${notificationId} as read. Saved read status: ${savedNotification.read}`);
+    } else {
+      // For regular users, mark their specific recipient status
+      await notification.markAsRead(userId);
+    }
 
     res.json({
       success: true,
@@ -507,7 +527,7 @@ async function addRoleBasedRecipients(notification) {
   }
 }
 
-async function processNotificationDelivery(notification) {
+export async function processNotificationDelivery(notification) {
   try {
     // Process different delivery channels
     if (notification.channels.email?.enabled) {
