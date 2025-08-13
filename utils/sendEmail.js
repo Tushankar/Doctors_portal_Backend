@@ -1,14 +1,14 @@
 // utils/sendEmail.js
-import transporter from '../config/email.js';
+import transporter from "../config/email.js";
 
-const EMAIL_USER = 'tirtho.kyptronix@gmail.com';
+const EMAIL_USER = process.env.EMAIL_USER;
 
 const sendEmail = async (options) => {
   const mailOptions = {
     from: `Patient Pharmacy System <${EMAIL_USER}>`,
     to: options.email,
     subject: options.subject,
-    html: options.html
+    html: options.html,
   };
 
   await transporter.sendMail(mailOptions);
@@ -16,9 +16,9 @@ const sendEmail = async (options) => {
 
 export const sendOTPEmail = async (email, otp, purpose) => {
   const subjects = {
-    email_verification: 'Verify Your Email',
-    password_reset: 'Reset Your Password',
-    two_factor: 'Two-Factor Authentication'
+    email_verification: "Verify Your Email",
+    password_reset: "Reset Your Password",
+    two_factor: "Two-Factor Authentication",
   };
 
   const html = `
@@ -39,17 +39,20 @@ export const sendOTPEmail = async (email, otp, purpose) => {
     await sendEmail({
       email,
       subject: subjects[purpose],
-      html
+      html,
     });
     console.log(`OTP email sent successfully to ${email}`);
   } catch (error) {
-    console.error('Failed to send OTP email:', error);
+    console.error("Failed to send OTP email:", error);
     throw error;
   }
 };
 
 // Send pharmacy approval notification to admin
-export const sendApprovalNotificationToAdmin = async (adminEmail, pharmacyDetails) => {
+export const sendApprovalNotificationToAdmin = async (
+  adminEmail,
+  pharmacyDetails
+) => {
   const html = `
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
       <div style="background-color: #f8f9fa; border-radius: 10px; padding: 30px;">
@@ -70,12 +73,12 @@ export const sendApprovalNotificationToAdmin = async (adminEmail, pharmacyDetail
   try {
     await sendEmail({
       email: adminEmail,
-      subject: 'New Pharmacy Registration Pending Approval',
-      html
+      subject: "New Pharmacy Registration Pending Approval",
+      html,
     });
     console.log(`Admin notification sent to ${adminEmail}`);
   } catch (error) {
-    console.error('Failed to send admin notification:', error);
+    console.error("Failed to send admin notification:", error);
     throw error;
   }
 };
@@ -91,19 +94,27 @@ export const sendApprovalEmail = async (email, details) => {
           <h3 style="color: #333; text-align: center;">Your Pharmacy Registration is Approved</h3>
           
           <div style="background-color: #fff; border-radius: 8px; padding: 20px; margin: 20px 0;">
-            <p style="color: #666; font-size: 16px;">Dear ${details.pharmacyName},</p>
+            <p style="color: #666; font-size: 16px;">Dear ${
+              details.pharmacyName
+            },</p>
             <p style="color: #666;">We are pleased to inform you that your pharmacy registration has been approved. Welcome to our platform!</p>
             
             <p style="color: #666; margin-top: 20px;">Please verify your email address using the OTP below to activate your account:</p>
             <div style="background-color: #f0f8ff; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center;">
-              <h1 style="color: #4CAF50; font-size: 48px; margin: 0; letter-spacing: 8px;">${details.otp}</h1>
+              <h1 style="color: #4CAF50; font-size: 48px; margin: 0; letter-spacing: 8px;">${
+                details.otp
+              }</h1>
             </div>
             
-            ${details.remarks ? `
+            ${
+              details.remarks
+                ? `
               <div style="background-color: #fff3cd; border-radius: 8px; padding: 15px; margin: 20px 0;">
                 <p style="color: #856404; margin: 0;"><strong>Admin Remarks:</strong> ${details.remarks}</p>
               </div>
-            ` : ''}
+            `
+                : ""
+            }
           </div>
           
           <div style="text-align: center; margin-top: 30px;">
@@ -119,12 +130,12 @@ export const sendApprovalEmail = async (email, details) => {
     try {
       await sendEmail({
         email,
-        subject: '✅ Your Pharmacy Registration Has Been Approved!',
-        html
+        subject: "✅ Your Pharmacy Registration Has Been Approved!",
+        html,
       });
       console.log(`Approval email sent to ${email}`);
     } catch (error) {
-      console.error('Failed to send approval email:', error);
+      console.error("Failed to send approval email:", error);
       throw error;
     }
   } else {
@@ -170,12 +181,12 @@ export const sendRejectionEmail = async (email, details) => {
   try {
     await sendEmail({
       email,
-      subject: 'Pharmacy Registration Status Update',
-      html
+      subject: "Pharmacy Registration Status Update",
+      html,
     });
     console.log(`Rejection email sent to ${email}`);
   } catch (error) {
-    console.error('Failed to send rejection email:', error);
+    console.error("Failed to send rejection email:", error);
     throw error;
   }
 };
@@ -183,12 +194,12 @@ export const sendRejectionEmail = async (email, details) => {
 // Send welcome email for new admin
 export const sendAdminWelcomeEmail = async (email, details) => {
   const permissionsDisplay = {
-    manage_users: 'Manage Users',
-    manage_pharmacies: 'Manage Pharmacies',
-    manage_patients: 'Manage Patients',
-    view_transactions: 'View Transactions',
-    manage_settings: 'Manage Settings',
-    view_analytics: 'View Analytics'
+    manage_users: "Manage Users",
+    manage_pharmacies: "Manage Pharmacies",
+    manage_patients: "Manage Patients",
+    view_transactions: "View Transactions",
+    manage_settings: "Manage Settings",
+    view_analytics: "View Analytics",
   };
 
   const html = `
@@ -197,13 +208,17 @@ export const sendAdminWelcomeEmail = async (email, details) => {
         <h2 style="color: #333; text-align: center;">Welcome to the Admin Team!</h2>
         
         <div style="background-color: #fff; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          <p style="color: #666; font-size: 16px;">Dear ${details.firstName} ${details.lastName},</p>
+          <p style="color: #666; font-size: 16px;">Dear ${details.firstName} ${
+    details.lastName
+  },</p>
           <p style="color: #666;">Your admin account has been created successfully. You are now part of our administrative team.</p>
           
           <div style="background-color: #d4edda; border-radius: 8px; padding: 15px; margin: 20px 0;">
             <h4 style="color: #155724; margin-bottom: 10px;">Your Permissions:</h4>
             <ul style="color: #155724; margin: 0;">
-              ${details.permissions.map(perm => `<li>${permissionsDisplay[perm] || perm}</li>`).join('')}
+              ${details.permissions
+                .map((perm) => `<li>${permissionsDisplay[perm] || perm}</li>`)
+                .join("")}
             </ul>
           </div>
           
@@ -228,12 +243,12 @@ export const sendAdminWelcomeEmail = async (email, details) => {
   try {
     await sendEmail({
       email,
-      subject: 'Welcome to Admin Panel - Patient Pharmacy System',
-      html
+      subject: "Welcome to Admin Panel - Patient Pharmacy System",
+      html,
     });
     console.log(`Admin welcome email sent to ${email}`);
   } catch (error) {
-    console.error('Failed to send admin welcome email:', error);
+    console.error("Failed to send admin welcome email:", error);
     throw error;
   }
 };

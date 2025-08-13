@@ -1,14 +1,13 @@
-
 // }
 import { v2 as cloudinary } from "cloudinary";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
 import multer from "multer";
 
-// Configure Cloudinary with env variables or defaults
+// Configure Cloudinary with env variables
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || "diaybbqo5",
-  api_key: process.env.CLOUDINARY_API_KEY || "434841113357938",
-  api_secret: process.env.CLOUDINARY_API_SECRET || "M28Lk8RRxSh6RXgfqeFdhg36Smk",
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 // Upload presets for different use cases
@@ -78,7 +77,9 @@ export function generateSignedUploadUrl(preset, userId) {
   );
 
   return {
-    url: `https://api.cloudinary.com/v1_1/${cloudinary.config().cloud_name}/auto/upload`,
+    url: `https://api.cloudinary.com/v1_1/${
+      cloudinary.config().cloud_name
+    }/auto/upload`,
     params: {
       api_key: cloudinary.config().api_key,
       timestamp,

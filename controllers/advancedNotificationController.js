@@ -146,7 +146,7 @@ export const getUserNotifications = async (req, res) => {
       );
 
       const notificationObj = notification.toObject();
-      
+
       // For admin users, use the global read field; for others, use recipient status
       let readStatus;
       if (req.user.role === "admin") {
@@ -204,7 +204,9 @@ export const markNotificationAsRead = async (req, res) => {
     if (userRole === "admin") {
       notification.read = true;
       const savedNotification = await notification.save();
-      console.log(`Admin marked notification ${notificationId} as read. Saved read status: ${savedNotification.read}`);
+      console.log(
+        `Admin marked notification ${notificationId} as read. Saved read status: ${savedNotification.read}`
+      );
     } else {
       // For regular users, mark their specific recipient status
       await notification.markAsRead(userId);
@@ -573,7 +575,7 @@ async function sendEmailNotifications(notification) {
         const emailContent = generateEmailContent(notification, user);
 
         const mailOptions = {
-          from: process.env.EMAIL_USER || "tirtho.kyptronix@gmail.com",
+          from: process.env.EMAIL_USER,
           to: user.email,
           subject: emailContent.subject,
           html: emailContent.html,
@@ -618,9 +620,7 @@ function generateEmailContent(notification, user) {
     const button = notification.content.actionButton;
     actionButtonHtml = `
       <div style="text-align: center; margin: 30px 0;">
-        <a href="${process.env.FRONTEND_URL || "http://localhost:5173"}${
-      button.url
-    }" 
+        <a href="${process.env.FRONTEND_URL}${button.url}" 
            style="background: ${color}; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
           ${button.text}
         </a>

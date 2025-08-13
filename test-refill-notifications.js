@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
+import dotenv from "dotenv";
 import RefillRequest from "./controllers/refillController.js";
 import { createRefillResponseNotification } from "./utils/refillNotifications.js";
+
+// Load environment variables
+dotenv.config();
 
 // Test the refill notification system
 async function testRefillNotifications() {
@@ -8,9 +12,7 @@ async function testRefillNotifications() {
     console.log("🧪 Testing Refill Notification System...");
 
     // Connect to MongoDB
-    await mongoose.connect(
-      process.env.MONGODB_URI || "mongodb://localhost:27017/doctorportal"
-    );
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log("✅ Connected to MongoDB");
 
     // Find a sample refill request to test with
