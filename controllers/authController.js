@@ -12,6 +12,7 @@ import {
   sendOTPEmail,
   sendApprovalEmail,
   sendRejectionEmail,
+  sendApprovalNotificationToAdmin,
 } from "../utils/sendEmail.js";
 import { createUploadMiddleware } from "../config/cloudinary.js";
 const pharmacyUpload = createUploadMiddleware("PHARMACY_VERIFICATION");
@@ -444,14 +445,20 @@ export const register = async (req, res, next) => {
           $or: [{ permissions: "manage_pharmacies" }, { isSuperAdmin: true }],
         });
 
+        console.log(
+          `Found ${admins.length} admins to notify about pharmacy registration`
+        );
+
         // Send notification emails to admins
         for (const admin of admins) {
           try {
-            await sendApprovalEmail(admin.email, {
+            console.log(`Sending notification to admin: ${admin.email}`);
+            await sendApprovalNotificationToAdmin(admin.email, {
               pharmacyName: profileData.pharmacyName,
               email: email,
               requestId: approvalRequest._id,
             });
+            console.log(`Successfully notified admin: ${admin.email}`);
           } catch (emailError) {
             console.error(`Failed to notify admin ${admin.email}:`, emailError);
           }
